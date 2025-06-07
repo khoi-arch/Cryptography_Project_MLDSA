@@ -133,8 +133,10 @@ def verify_signature_view(request):
                 signature = Signature.objects.get(
                     signer_name=signer_name,
                     document_path=document_path
+                    
                 )
                 signature_data = signature.signature_data
+                
             except Signature.DoesNotExist:
                 print("Signature not found in database")  # Debug log
                 return JsonResponse({
@@ -152,7 +154,9 @@ def verify_signature_view(request):
                 print("Signature verification completed")  # Debug log
                 return JsonResponse({
                     'message': 'Signature verification completed',
-                    'result': verification_result
+                    'result': verification_result,
+                    'timestamp': signature.created_at,
+                    'signer': signature.signer_name
                 })
             else:
                 print("Failed to verify signature")  # Debug log

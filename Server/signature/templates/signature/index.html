@@ -168,12 +168,18 @@
                 
                 if (response.ok) {
                     const result = data.result;
+                    const signer = data.signer;
+                    const timestamp = data.timestamp;
+
+                    console.log("signer:", signer);
+                    console.log("time:", timestamp);
+
                     let resultHtml = `<div class="alert alert-${result.is_signature_valid ? 'success' : 'danger'}">
                         <h5>Verification Result:</h5>
                         <p>Signature Valid: ${result.is_signature_valid ? 'Yes' : 'No'}</p>
                         <p>Document Unchanged: ${result.is_document_unchanged ? 'Yes' : 'No'}</p>
-                        <p>Signer: ${result.signer_name}</p>
-                        <p>Timestamp: ${new Date(result.timestamp * 1000).toLocaleString()}</p>
+                        <p>Signer: ${signer}</p>
+                        <p>Timestamp: ${new Date(timestamp).toLocaleString()}</p>
                     </div>`;
                     resultDiv.innerHTML = resultHtml;
                 } else {
