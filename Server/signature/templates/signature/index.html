@@ -25,6 +25,11 @@
                         <label for="signerName" class="form-label">Signer Name</label>
                         <input type="text" class="form-control" id="signerName" required>
                     </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="password" required>
+                        <small class="form-text text-muted">This password will be used to encrypt your private key. Please remember it!</small>
+                    </div>
                     <button type="submit" class="btn btn-primary">Generate Keys</button>
                 </form>
                 <div id="generateKeysResult" class="mt-3"></div>
@@ -41,6 +46,10 @@
                     <div class="mb-3">
                         <label for="signerNameSign" class="form-label">Signer Name</label>
                         <input type="text" class="form-control" id="signerNameSign" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="passwordSign" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="passwordSign" required>
                     </div>
                     <div class="mb-3">
                         <label for="documentPath" class="form-label">Document Path</label>
@@ -64,6 +73,10 @@
                         <input type="text" class="form-control" id="signerNameVerify" required>
                     </div>
                     <div class="mb-3">
+                        <label for="passwordVerify" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="passwordVerify" required>
+                    </div>
+                    <div class="mb-3">
                         <label for="documentPathVerify" class="form-label">Document Path</label>
                         <input type="text" class="form-control" id="documentPathVerify" required>
                     </div>
@@ -79,13 +92,17 @@
         document.getElementById('generateKeysForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const signerName = document.getElementById('signerName').value;
+            const password = document.getElementById('password').value;
             const resultDiv = document.getElementById('generateKeysResult');
             
             try {
                 const response = await fetch('/generate-keys/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ signer_name: signerName })
+                    body: JSON.stringify({ 
+                        signer_name: signerName,
+                        password: password
+                    })
                 });
                 const data = await response.json();
                 
@@ -103,6 +120,7 @@
         document.getElementById('signDocumentForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const signerName = document.getElementById('signerNameSign').value;
+            const password = document.getElementById('passwordSign').value;
             const documentPath = document.getElementById('documentPath').value;
             const resultDiv = document.getElementById('signDocumentResult');
             
@@ -112,6 +130,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         signer_name: signerName,
+                        password: password,
                         document_path: documentPath
                     })
                 });
@@ -131,6 +150,7 @@
         document.getElementById('verifySignatureForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const signerName = document.getElementById('signerNameVerify').value;
+            const password = document.getElementById('passwordVerify').value;
             const documentPath = document.getElementById('documentPathVerify').value;
             const resultDiv = document.getElementById('verifySignatureResult');
             
@@ -140,6 +160,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         signer_name: signerName,
+                        password: password,
                         document_path: documentPath
                     })
                 });

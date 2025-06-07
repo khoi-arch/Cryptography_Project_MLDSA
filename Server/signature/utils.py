@@ -4,6 +4,9 @@ import json
 import hashlib
 import os
 from docx import Document
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+from Crypto.Protocol.KDF import PBKDF2
 
 # PEM file format constants
 PRIVATEKEY_HEADER = b"-----BEGIN PRIVATE KEY-----\n"
@@ -44,83 +47,246 @@ def save_keys(public_key_bytes, secret_key_bytes, public_key_file="public.pem", 
         print(f"Error saving keys to .PEM file: {e}")
         return False
 
-def load_keys(public_key_file="public.pem", private_key_file="private.pem"):
-    """Load public and secret keys from .pem files."""
-    public_key_bytes = None
-    secret_key_bytes = None
-
+def load_private_key(password, signer_name):
+    """Load and decrypt private key for signing."""
     try:
-        # Load PublicKey
-        if os.path.exists(public_key_file):
-            with open(public_key_file, 'rb') as f_pub:
-                content = f_pub.read().strip()
-                if content.startswith(PUBLICKEY_HEADER) and content.endswith(PUBLICKEY_FOOTER):
-                    encoded_key = content[len(PUBLICKEY_HEADER):-len(PUBLICKEY_FOOTER)].strip()
-                    public_key_bytes = base64.b64decode(encoded_key)
-
-        # Load PrivateKey
-        if os.path.exists(private_key_file):
-            with open(private_key_file, 'rb') as f_priv:
-                content = f_priv.read().strip()
-                if content.startswith(PRIVATEKEY_HEADER) and content.endswith(PRIVATEKEY_FOOTER):
-                    encoded_key = content[len(PRIVATEKEY_HEADER):-len(PRIVATEKEY_FOOTER)].strip()
-                    secret_key_bytes = base64.b64decode(encoded_key)
-
+        print(f"Loading private key for {signer_name}")  # Debug log
+        
+        # Create full path to private key file
+        private_key_path = os.path.join('keys', f"{signer_name}.private.pem")
+        
+        print(f"Private key path: {private_key_path}")  # Debug log
+        
+        # Check if private key file exists
+        if not os.path.exists(private_key_path):
+            print(f"Private key file not found: {private_key_path}")  # Debug log
+            return None
+        
+        # Load private key data
+        print("Loading private key data...")  # Debug log
+        with open(private_key_path, 'r') as f:
+            private_key_data = json.load(f)
+            salt = base64.b64decode(private_key_data['salt'])
+            iv = base64.b64decode(private_key_data['iv'])
+            encrypted_key = base64.b64decode(private_key_data['encrypted_key'])
+        print("Private key data loaded")  # Debug log
+        
+        # Derive AES key from password
+        print("Deriving AES key...")  # Debug log
+        key = PBKDF2(password.encode(), salt, dkLen=32, count=10000)
+        
+        # Create AES cipher
+        print("Creating AES cipher...")  # Debug log
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        
+        # Decrypt the private key
+        print("Decrypting private key...")  # Debug log
+        decrypted_key = cipher.decrypt(encrypted_key)
+        
+        # Remove padding
+        private_key = decrypted_key.rstrip(b'\0')
+        print(f"Private key decrypted. Length: {len(private_key)} bytes")  # Debug log
+        
+        return private_key
+        
     except Exception as e:
-        print(f"Error loading keys from PEM file: {e}")
-
-    return public_key_bytes, secret_key_bytes
-
-def generate_keys():
-    """Generate new ML-DSA key pair."""
-    return ML_DSA_44.keygen()
-
-def sign_document(secret_key_bytes, document_path, signer_name):
-    """Sign a document and return signature data."""
-    try:
-        with open(document_path, 'rb') as f:
-            document_content_bytes = f.read()
-        
-        document_hash = hashlib.sha256(document_content_bytes).digest()
-        
-        signature_metadata = {
-            "signer_name": signer_name,
-            "document_hash": base64.b64encode(document_hash).decode('utf-8'),
-            "timestamp": os.path.getmtime(document_path)
-        }
-        
-        metadata_bytes = json.dumps(signature_metadata, sort_keys=True).encode('utf-8')
-        signature = ML_DSA_44.sign(secret_key_bytes, metadata_bytes)
-        
-        return {
-            "ml_dsa_signature": base64.b64encode(signature).decode('utf-8'),
-            "signed_metadata": base64.b64encode(metadata_bytes).decode('utf-8')
-        }
-    except Exception as e:
-        print(f"Error signing document: {e}")
+        print(f"Error in load_private_key: {str(e)}")  # Debug log
+        import traceback
+        print(traceback.format_exc())  # Print full traceback
         return None
 
-def verify_signature(public_key_bytes, document_path, signature_data):
-    """Verify document signature."""
+def load_public_key(signer_name):
+    """Load public key for verification."""
     try:
+        print(f"Loading public key for {signer_name}")  # Debug log
+        
+        # Create full path to public key file
+        public_key_path = os.path.join('keys', f"{signer_name}.public.pem")
+        
+        print(f"Public key path: {public_key_path}")  # Debug log
+        
+        # Check if public key file exists
+        if not os.path.exists(public_key_path):
+            print(f"Public key file not found: {public_key_path}")  # Debug log
+            return None
+        
+        # Load public key
+        print("Loading public key...")  # Debug log
+        with open(public_key_path, 'r') as f:
+            public_key_data = json.load(f)
+            public_key = base64.b64decode(public_key_data['public_key'])
+        print(f"Public key loaded. Length: {len(public_key)} bytes")  # Debug log
+        
+        return public_key
+        
+    except Exception as e:
+        print(f"Error in load_public_key: {str(e)}")  # Debug log
+        import traceback
+        print(traceback.format_exc())  # Print full traceback
+        return None
+
+def generate_keys(password, signer_name):
+    """Generate new ML-DSA key pair and save with encryption."""
+    try:
+        print(f"Starting key generation for {signer_name}")  # Debug log
+        
+        # Generate new key pair
+        print("Generating ML-DSA key pair...")  # Debug log
+        pk, sk = ML_DSA_44.keygen()
+        print(f"Key pair generated. Public key length: {len(pk)}, Secret key length: {len(sk)}")  # Debug log
+        
+        # Generate random salt and IV
+        print("Generating salt and IV...")  # Debug log
+        salt = get_random_bytes(16)
+        iv = get_random_bytes(16)
+        
+        # Derive AES key from password using PBKDF2
+        print("Deriving AES key...")  # Debug log
+        key = PBKDF2(password.encode(), salt, dkLen=32, count=10000)
+        
+        # Create AES cipher
+        print("Creating AES cipher...")  # Debug log
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        
+        # Pad the secret key to be multiple of 16 bytes
+        print("Padding secret key...")  # Debug log
+        padded_sk = sk + b'\0' * (16 - len(sk) % 16)
+        
+        # Encrypt the secret key
+        print("Encrypting secret key...")  # Debug log
+        encrypted_sk = cipher.encrypt(padded_sk)
+        
+        # Create directory if it doesn't exist
+        print("Creating keys directory...")  # Debug log
+        os.makedirs('keys', exist_ok=True)
+        
+        # Save public key
+        print("Saving public key...")  # Debug log
+        public_key_data = {
+            'public_key': base64.b64encode(pk).decode('utf-8')
+        }
+        public_key_path = os.path.join('keys', f"{signer_name}.public.pem")
+        with open(public_key_path, 'w') as f:
+            json.dump(public_key_data, f)
+        print(f"Public key saved to {public_key_path}")  # Debug log
+        
+        # Save encrypted private key with salt and IV
+        print("Saving private key...")  # Debug log
+        private_key_data = {
+            'salt': base64.b64encode(salt).decode('utf-8'),
+            'iv': base64.b64encode(iv).decode('utf-8'),
+            'encrypted_key': base64.b64encode(encrypted_sk).decode('utf-8')
+        }
+        private_key_path = os.path.join('keys', f"{signer_name}.private.pem")
+        with open(private_key_path, 'w') as f:
+            json.dump(private_key_data, f)
+        print(f"Private key saved to {private_key_path}")  # Debug log
+        
+        return pk, sk
+        
+    except Exception as e:
+        print(f"Error in generate_keys: {str(e)}")
+        import traceback
+        print(traceback.format_exc())  # Print full traceback
+        return None, None
+
+def sign_document(secret_key, document_path, signer_name):
+    """Sign a document using ML-DSA."""
+    try:
+        print(f"Starting document signing for {signer_name}")  # Debug log
+        print(f"Document path: {document_path}")  # Debug log
+        
+        # Check if document exists
+        if not os.path.exists(document_path):
+            print(f"Document not found: {document_path}")  # Debug log
+            return None
+            
+        # Read document
+        print("Reading document...")  # Debug log
         with open(document_path, 'rb') as f:
-            document_content = f.read()
-        current_document_hash = hashlib.sha256(document_content).digest()
+            document_data = f.read()
+        print(f"Document size: {len(document_data)} bytes")  # Debug log
         
-        actual_signature = base64.b64decode(signature_data["ml_dsa_signature"])
-        metadata_bytes = base64.b64decode(signature_data["signed_metadata"])
+        # Generate signature
+        print("Generating signature...")  # Debug log
+        signature = ML_DSA_44.sign(secret_key, document_data)
+        print(f"Signature generated. Length: {len(signature)} bytes")  # Debug log
         
-        signature_metadata = json.loads(metadata_bytes.decode('utf-8'))
-        signed_document_hash = base64.b64decode(signature_metadata["document_hash"])
+        # Convert signature to base64
+        signature_b64 = base64.b64encode(signature).decode('utf-8')
         
-        is_signature_valid = ML_DSA_44.verify(public_key_bytes, metadata_bytes, actual_signature)
+        # Save signature to database
+        print("Saving signature to database...")  # Debug log
+        from .models import Signature
+        try:
+            # Check if signature already exists
+            existing_signature = Signature.objects.filter(
+                signer_name=signer_name,
+                document_path=document_path
+            ).first()
+            
+            if existing_signature:
+                # Update existing signature
+                existing_signature.signature_data = signature_b64
+                existing_signature.save()
+                print("Updated existing signature")  # Debug log
+            else:
+                # Create new signature
+                Signature.objects.create(
+                    signer_name=signer_name,
+                    document_path=document_path,
+                    signature_data=signature_b64
+                )
+                print("Created new signature")  # Debug log
+                
+        except Exception as db_error:
+            print(f"Database error: {str(db_error)}")  # Debug log
+            import traceback
+            print(traceback.format_exc())  # Print full traceback
+            return None
+            
+        print("Signature saved successfully")  # Debug log
+        return signature_b64
+        
+    except Exception as e:
+        print(f"Error in sign_document: {str(e)}")  # Debug log
+        import traceback
+        print(traceback.format_exc())  # Print full traceback
+        return None
+
+def verify_signature(public_key, document_path, signature_data):
+    """Verify a document signature using ML-DSA."""
+    try:
+        print(f"Starting signature verification for document: {document_path}")  # Debug log
+        
+        # Check if document exists
+        if not os.path.exists(document_path):
+            print(f"Document not found: {document_path}")  # Debug log
+            return None
+            
+        # Read document
+        print("Reading document...")  # Debug log
+        with open(document_path, 'rb') as f:
+            document_data = f.read()
+        print(f"Document size: {len(document_data)} bytes")  # Debug log
+        
+        # Decode signature
+        print("Decoding signature...")  # Debug log
+        signature = base64.b64decode(signature_data)
+        print(f"Signature length: {len(signature)} bytes")  # Debug log
+        
+        # Verify signature
+        print("Verifying signature...")  # Debug log
+        is_valid = ML_DSA_44.verify(public_key, document_data, signature)
+        print(f"Signature verification result: {is_valid}")  # Debug log
         
         return {
-            "is_signature_valid": is_signature_valid,
-            "is_document_unchanged": current_document_hash == signed_document_hash,
-            "signer_name": signature_metadata.get("signer_name"),
-            "timestamp": signature_metadata.get("timestamp")
+            'is_signature_valid': is_valid,
+            'is_document_unchanged': is_valid
         }
+        
     except Exception as e:
-        print(f"Error verifying signature: {e}")
+        print(f"Error in verify_signature: {str(e)}")  # Debug log
+        import traceback
+        print(traceback.format_exc())  # Print full traceback
         return None 
