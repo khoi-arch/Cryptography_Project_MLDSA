@@ -14,6 +14,7 @@ from .utils import (
 import tempfile
 from datetime import datetime
 from dilithium_py.ml_dsa import ML_DSA_44
+import traceback
 
 # Tạo thư mục lưu hóa đơn nếu chưa tồn tại
 INVOICES_DIR = os.path.join(settings.BASE_DIR, 'invoices')
@@ -105,7 +106,6 @@ def sign_document_view(request):
                 
         except Exception as e:
             print(f"Error in sign_document_view: {str(e)}")  # Debug log
-            import traceback
             print(traceback.format_exc())  # Print full traceback
             return JsonResponse({'error': str(e)}, status=500)
     
@@ -178,7 +178,6 @@ def verify_signature_view(request):
                 
         except Exception as e:
             print(f"Error in verify_signature_view: {str(e)}")  # Debug log
-            import traceback
             print(traceback.format_exc())  # Print full traceback
             return JsonResponse({'error': str(e)}, status=500)
     
@@ -241,18 +240,26 @@ def verify_pdf(request):
 
 @csrf_exempt
 def check_user(request):
-    """Kiểm tra user tồn tại"""
+    """Kiểm tra user tồn tại và trả về vai trò"""
     if request.method == 'GET':
         username = request.GET.get('username')
         if not username:
             return JsonResponse({'error': 'Username is required'}, status=400)
             
-        # Kiểm tra public key file tồn tại
+        # Kiểm tra public key file tồn tại và đọc vai trò
         public_key_path = os.path.join('keys', f"{username}.public.pem")
         if os.path.exists(public_key_path):
-            return JsonResponse({'message': 'User exists'})
+            try:
+                with open(public_key_path, 'r') as f:
+                    key_data = json.load(f)
+                    role = key_data.get('role')  # Lấy vai trò từ file
+                return JsonResponse({'message': 'User exists', 'role': role})  # Trả về vai trò
+            except Exception as e:
+                # Ghi log lỗi nếu không đọc được file hoặc thiếu trường role
+                print(f"Error reading public key file for user {username}: {str(e)}")
+                return JsonResponse({'error': f'Could not read user data for {username}'}, status=500)
         else:
-            return JsonResponse({'error': 'User not found'}, status=404)
+            return JsonResponse({'message': 'User not found'})
             
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
@@ -368,7 +375,7 @@ def download_invoice(request, invoice_id):
 
 @csrf_exempt
 def get_public_key(request):
-    """Trả về public key của user"""
+    """Trả về public key và role của user"""
     if request.method == 'GET':
         signer_name = request.GET.get('signer_name')
         if not signer_name:
@@ -378,7 +385,8 @@ def get_public_key(request):
             return JsonResponse({'error': 'Public key not found'}, status=404)
         with open(public_key_path, 'r') as f:
             data = json.load(f)
-        return JsonResponse({'public_key': data['public_key']})
+        # Trả về cả public key và role
+        return JsonResponse({'public_key': data['public_key'], 'role': data.get('role')})
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 @csrf_exempt
@@ -452,17 +460,72 @@ def download_order(request, order_id):
         try:
             metadata_path = os.path.join(ORDERS_DIR, 'orders.json')
             if not os.path.exists(metadata_path):
+                print(f"Error: orders.json not found at {metadata_path}") # Debug log
                 return JsonResponse({'error': 'No orders found'}, status=404)
+            
             with open(metadata_path, 'r') as f:
                 orders = json.load(f)
+            
             order = next((o for o in orders if o['id'] == int(order_id)), None)
             if not order:
+                print(f"Error: Order with ID {order_id} not found in {metadata_path}") # Debug log
                 return JsonResponse({'error': 'Order not found'}, status=404)
+            
+            file_path = order['file_path']
+            print(f"Attempting to open file: {file_path}") # Debug log
+            
+            if not os.path.exists(file_path):
+                print(f"Error: File does not exist at {file_path}") # Debug log
+                return JsonResponse({'error': f'File not found on server: {file_path}'}, status=404)
+            
+            # Check permissions (optional, but good for debugging)
+            if not os.access(file_path, os.R_OK):
+                print(f"Error: No read permissions for file: {file_path}") # Debug log
+                return JsonResponse({'error': f'No read permissions for file: {file_path}'}, status=403) # Forbidden
+            
             return FileResponse(
-                open(order['file_path'], 'rb'),
+                open(file_path, 'rb'),
                 as_attachment=True,
                 filename=f"order_{order['buyer_name']}.pdf"
             )
         except Exception as e:
+            print(f"Exception in download_order: {str(e)}") # Debug log
+            print(traceback.format_exc()) # In toàn bộ traceback
             return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def register(request):
+    """Đăng ký user mới và lưu public key cùng với vai trò"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            username = data.get('username')
+            public_key = data.get('public_key')
+            role = data.get('role')  # Lấy vai trò từ request
+
+            if not all([username, public_key, role]):  # Kiểm tra cả vai trò
+                return JsonResponse({'error': 'Username, public key, and role are required'}, status=400)
+
+            # Tạo thư mục keys nếu chưa tồn tại
+            keys_dir = os.path.join(settings.BASE_DIR, 'keys')
+            os.makedirs(keys_dir, exist_ok=True)
+
+            # Lưu public key và role vào file
+            public_key_path = os.path.join(keys_dir, f"{username}.public.pem")
+            with open(public_key_path, 'w') as f:
+                json.dump({
+                    'public_key': public_key,
+                    'role': role  # Lưu vai trò
+                }, f)
+
+            return JsonResponse({
+                'message': 'Registration successful',
+                'username': username,
+                'role': role  # Trả về vai trò
+            })
+
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+
     return JsonResponse({'error': 'Method not allowed'}, status=405)
