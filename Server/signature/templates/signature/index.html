@@ -85,6 +85,55 @@
                 <div id="verifySignatureResult" class="mt-3"></div>
             </div>
         </div>
+
+        <!-- PDF Sign and Verify Section -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="mb-0">Ký và xác thực PDF (nhúng signature vào metadata)</h5>
+            </div>
+            <div class="card-body">
+                <form id="signPdfForm" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label class="form-label">Chọn file PDF để ký</label>
+                        <input type="file" class="form-control" id="pdfToSign" accept="application/pdf" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Signer Name</label>
+                        <input type="text" class="form-control" id="signerNamePdf" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" class="form-control" id="passwordPdf" required />
+                    </div>
+                    <button type="submit" class="btn btn-success">Ký và nhúng signature</button>
+                </form>
+                <div id="signPdfResult" class="mt-3"></div>
+            </div>
+        </div>
+
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="mb-0">Xác thực PDF đã nhúng signature</h5>
+            </div>
+            <div class="card-body">
+                <form id="verifyPdfForm" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label class="form-label">Chọn file PDF đã ký</label>
+                        <input type="file" class="form-control" id="pdfToVerify" accept="application/pdf" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Public Key (base64)</label>
+                        <div class="input-group">
+                            <input type="file" class="form-control" id="publicKeyPdfFile" accept="application/json" />
+                            <button type="button" class="btn btn-outline-secondary" id="loadPublicKeyBtn">Tải từ file</button>
+                        </div>
+                        <textarea class="form-control mt-2" id="publicKeyPdf" rows="3" required></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Xác thực PDF</button>
+                </form>
+                <div id="verifyPdfResult" class="mt-3"></div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -187,6 +236,94 @@
                 }
             } catch (error) {
                 resultDiv.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            }
+        });
+
+        // Ký PDF và nhúng signature
+        const signPdfForm = document.getElementById('signPdfForm');
+        signPdfForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('pdfToSign');
+            const signerName = document.getElementById('signerNamePdf').value;
+            const password = document.getElementById('passwordPdf').value;
+            const resultDiv = document.getElementById('signPdfResult');
+            if (!fileInput.files.length) {
+                resultDiv.innerHTML = '<div class="alert alert-danger">Vui lòng chọn file PDF.</div>';
+                return;
+            }
+            const formData = new FormData();
+            formData.append('pdf', fileInput.files[0]);
+            formData.append('signer_name', signerName);
+            formData.append('password', password);
+            try {
+                const response = await fetch('/sign-pdf/', {
+                    method: 'POST',
+                    body: formData
+                });
+                const contentType = response.headers.get('Content-Type');
+                if (response.ok && contentType && contentType.includes('application/pdf')) {
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    resultDiv.innerHTML = `<div class="alert alert-success">Đã ký thành công! <a href="${url}" download="signed.pdf">Tải PDF đã ký</a></div>`;
+                } else {
+                    const data = await response.json();
+                    resultDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                }
+            } catch (err) {
+                resultDiv.innerHTML = `<div class="alert alert-danger">Lỗi: ${err.message}</div>`;
+            }
+        });
+
+        // Xác thực PDF đã nhúng signature
+        const verifyPdfForm = document.getElementById('verifyPdfForm');
+        verifyPdfForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('pdfToVerify');
+            const publicKey = document.getElementById('publicKeyPdf').value;
+            const resultDiv = document.getElementById('verifyPdfResult');
+            if (!fileInput.files.length) {
+                resultDiv.innerHTML = '<div class="alert alert-danger">Vui lòng chọn file PDF.</div>';
+                return;
+            }
+            const formData = new FormData();
+            formData.append('pdf', fileInput.files[0]);
+            formData.append('public_key', publicKey);
+            try {
+                const response = await fetch('/verify-pdf/', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    resultDiv.innerHTML = `<div class="alert alert-success">Kết quả xác thực: <b>${data.is_valid ? 'HỢP LỆ' : 'KHÔNG HỢP LỆ'}</b></div>`;
+                } else {
+                    resultDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                }
+            } catch (err) {
+                resultDiv.innerHTML = `<div class="alert alert-danger">Lỗi: ${err.message}</div>`;
+            }
+        });
+
+        // Xử lý chọn file public key JSON cho xác thực PDF
+        const publicKeyPdfFile = document.getElementById('publicKeyPdfFile');
+        const publicKeyPdfTextarea = document.getElementById('publicKeyPdf');
+        const loadPublicKeyBtn = document.getElementById('loadPublicKeyBtn');
+        loadPublicKeyBtn.addEventListener('click', async () => {
+            if (!publicKeyPdfFile.files.length) {
+                alert('Vui lòng chọn file public key (.json)');
+                return;
+            }
+            const file = publicKeyPdfFile.files[0];
+            const text = await file.text();
+            try {
+                const json = JSON.parse(text);
+                if (json.public_key) {
+                    publicKeyPdfTextarea.value = json.public_key;
+                } else {
+                    alert('File không hợp lệ: không tìm thấy trường public_key');
+                }
+            } catch (e) {
+                alert('File không phải là JSON hợp lệ!');
             }
         });
     </script>

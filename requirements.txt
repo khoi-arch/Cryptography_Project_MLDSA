@@ -1,0 +1,5 @@
+PyQt5==5.15.9
+requests==2.31.0
+pycryptodome==3.19.0
+PyPDF2==3.0.1
+dilithium-py==1.1.0 

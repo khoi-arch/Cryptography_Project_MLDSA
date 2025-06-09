@@ -7,12 +7,17 @@ from docx import Document
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 from Crypto.Protocol.KDF import PBKDF2
+from PyPDF2 import PdfReader, PdfWriter
+from PyPDF2.generic import NameObject, TextStringObject
+from datetime import datetime
 
 # PEM file format constants
 PRIVATEKEY_HEADER = b"-----BEGIN PRIVATE KEY-----\n"
 PRIVATEKEY_FOOTER = b"-----END PRIVATE KEY-----\n"
 PUBLICKEY_HEADER = b"-----BEGIN PUBLIC KEY-----\n"
 PUBLICKEY_FOOTER = b"-----END PUBLIC KEY-----\n"
+
+SIGNATURE_PLACEHOLDER = '__SIGNATURE_PLACEHOLDER__'
 
 def read_file_content(file_path):
     """Read content from file."""
@@ -126,12 +131,12 @@ def load_public_key(signer_name):
         return None
 
 def generate_keys(password, signer_name):
-    """Generate new ML-DSA key pair and save with encryption."""
+    """Generate new ML-DSA-44 key pair and save with encryption."""
     try:
         print(f"Starting key generation for {signer_name}")  # Debug log
         
         # Generate new key pair
-        print("Generating ML-DSA key pair...")  # Debug log
+        print("Generating ML-DSA-44 key pair...")  # Debug log
         pk, sk = ML_DSA_44.keygen()
         print(f"Key pair generated. Public key length: {len(pk)}, Secret key length: {len(sk)}")  # Debug log
         
@@ -171,7 +176,7 @@ def generate_keys(password, signer_name):
         print(f"Public key saved to {public_key_path}")  # Debug log
         
         # Save encrypted private key with salt and IV
-        print("Saving private key...")  # Debug log
+        print("Saving private key...")
         private_key_data = {
             'salt': base64.b64encode(salt).decode('utf-8'),
             'iv': base64.b64encode(iv).decode('utf-8'),
@@ -191,102 +196,217 @@ def generate_keys(password, signer_name):
         return None, None
 
 def sign_document(secret_key, document_path, signer_name):
-    """Sign a document using ML-DSA."""
+    """Sign a document using ML-DSA-44."""
     try:
-        print(f"Starting document signing for {signer_name}")  # Debug log
-        print(f"Document path: {document_path}")  # Debug log
-        
-        # Check if document exists
-        if not os.path.exists(document_path):
-            print(f"Document not found: {document_path}")  # Debug log
+        # Read document content
+        content = read_file_content(document_path)
+        if not content:
             return None
             
-        # Read document
-        print("Reading document...")  # Debug log
-        with open(document_path, 'rb') as f:
-            document_data = f.read()
-        print(f"Document size: {len(document_data)} bytes")  # Debug log
+        # Hash the content
+        content_hash = hashlib.sha256(content.encode()).digest()
         
-        # Generate signature
-        print("Generating signature...")  # Debug log
-        signature = ML_DSA_44.sign(secret_key, document_data)
-        print(f"Signature generated. Length: {len(signature)} bytes")  # Debug log
+        # Sign the hash
+        signature = ML_DSA_44.sign(secret_key, content_hash)
         
-        # Convert signature to base64
-        signature_b64 = base64.b64encode(signature).decode('utf-8')
+        # Create signature data
+        signature_data = {
+            'signature': base64.b64encode(signature).decode('utf-8'),
+            'timestamp': datetime.now().isoformat(),
+            'signer_name': signer_name
+        }
         
-        # Save signature to database
-        print("Saving signature to database...")  # Debug log
-        from .models import Signature
-        try:
-            # Check if signature already exists
-            existing_signature = Signature.objects.filter(
-                signer_name=signer_name,
-                document_path=document_path
-            ).first()
-            
-            if existing_signature:
-                # Update existing signature
-                existing_signature.signature_data = signature_b64
-                existing_signature.save()
-                print("Updated existing signature")  # Debug log
-            else:
-                # Create new signature
-                Signature.objects.create(
-                    signer_name=signer_name,
-                    document_path=document_path,
-                    signature_data=signature_b64
-                )
-                print("Created new signature")  # Debug log
-                
-        except Exception as db_error:
-            print(f"Database error: {str(db_error)}")  # Debug log
-            import traceback
-            print(traceback.format_exc())  # Print full traceback
-            return None
-            
-        print("Signature saved successfully")  # Debug log
-        return signature_b64
+        return signature_data
         
     except Exception as e:
-        print(f"Error in sign_document: {str(e)}")  # Debug log
-        import traceback
-        print(traceback.format_exc())  # Print full traceback
+        print(f"Error in sign_document: {str(e)}")
         return None
 
 def verify_signature(public_key, document_path, signature_data):
-    """Verify a document signature using ML-DSA."""
+    """Verify a document signature using ML-DSA-44."""
     try:
-        print(f"Starting signature verification for document: {document_path}")  # Debug log
-        
-        # Check if document exists
-        if not os.path.exists(document_path):
-            print(f"Document not found: {document_path}")  # Debug log
+        # Read document content
+        content = read_file_content(document_path)
+        if not content:
             return None
             
-        # Read document
-        print("Reading document...")  # Debug log
-        with open(document_path, 'rb') as f:
-            document_data = f.read()
-        print(f"Document size: {len(document_data)} bytes")  # Debug log
+        # Hash the content
+        content_hash = hashlib.sha256(content.encode()).digest()
         
         # Decode signature
-        print("Decoding signature...")  # Debug log
-        signature = base64.b64decode(signature_data)
-        print(f"Signature length: {len(signature)} bytes")  # Debug log
+        signature = base64.b64decode(signature_data['signature'])
         
         # Verify signature
-        print("Verifying signature...")  # Debug log
-        is_valid = ML_DSA_44.verify(public_key, document_data, signature)
-        print(f"Signature verification result: {is_valid}")  # Debug log
+        is_valid = ML_DSA_44.verify(public_key, content_hash, signature)
         
         return {
-            'is_signature_valid': is_valid,
-            'is_document_unchanged': is_valid
+            'is_valid': is_valid,
+            'timestamp': signature_data['timestamp'],
+            'signer_name': signature_data['signer_name']
         }
         
     except Exception as e:
-        print(f"Error in verify_signature: {str(e)}")  # Debug log
-        import traceback
-        print(traceback.format_exc())  # Print full traceback
-        return None 
+        print(f"Error in verify_signature: {str(e)}")
+        return None
+
+def sign_pdf_and_embed_signature(pdf_path, private_key, output_path):
+    """Ký file PDF và nhúng signature vào metadata trường /Subject với placeholder."""
+    try:
+        # Bước 1: Ghi file PDF với placeholder
+        reader = PdfReader(pdf_path)
+        writer = PdfWriter()
+        writer.append_pages_from_reader(reader)
+        metadata = reader.metadata or {}
+        metadata = {NameObject(str(k)): str(v) for k, v in metadata.items()}
+        metadata[NameObject('/Subject')] = SIGNATURE_PLACEHOLDER
+        writer.add_metadata(metadata)
+        import io
+        buf = io.BytesIO()
+        writer.write(buf)
+        pdf_bytes_with_placeholder = buf.getvalue()
+
+        # Debug: In metadata gốc
+        print('Original PDF metadata:', metadata)
+
+        # Lưu file PDF với placeholder để debug
+        debug_dir = os.path.join(os.path.dirname(pdf_path), 'debug')
+        print(f"Creating debug directory at: {debug_dir}")
+        os.makedirs(debug_dir, exist_ok=True)
+        placeholder_path = os.path.join(debug_dir, 'pdf_with_placeholder_backend.pdf')
+        print(f"Saving placeholder PDF to: {placeholder_path}")
+        with open(placeholder_path, 'wb') as f:
+            f.write(pdf_bytes_with_placeholder)
+        print(f"Successfully saved placeholder PDF, size: {len(pdf_bytes_with_placeholder)} bytes")
+
+        # Bước 2: Sinh signature trên bytes này
+        signature = ML_DSA_44.sign(private_key, pdf_bytes_with_placeholder)
+        signature_b64 = base64.b64encode(signature).decode('utf-8')
+
+        # Debug: In signature
+        print('Generated signature:', signature_b64)
+        print('Signature length:', len(signature))
+
+        # Bước 3: Ghi lại file PDF với signature thực sự
+        writer2 = PdfWriter()
+        reader2 = PdfReader(io.BytesIO(pdf_bytes_with_placeholder))
+        writer2.append_pages_from_reader(reader2)
+        metadata2 = reader2.metadata or {}
+        metadata2 = {NameObject(str(k)): str(v) for k, v in metadata2.items()}
+        metadata2[NameObject('/Subject')] = signature_b64
+        writer2.add_metadata(metadata2)
+        with open(output_path, 'wb') as f:
+            writer2.write(f)
+
+        # Debug: In metadata sau khi ký
+        print('Metadata after signing:', metadata2)
+
+        # Tạo thông tin debug
+        debug_info = {
+            'original_pdf_size': os.path.getsize(pdf_path),
+            'placeholder_pdf_size': len(pdf_bytes_with_placeholder),
+            'signed_pdf_size': os.path.getsize(output_path),
+            'signature_length': len(signature),
+            'private_key_length': len(private_key),
+            'metadata': {
+                'title': metadata.get('/Title', ''),
+                'author': metadata.get('/Author', ''),
+                'subject': metadata.get('/Subject', ''),
+                'creator': metadata.get('/Creator', ''),
+                'producer': metadata.get('/Producer', ''),
+                'creation_date': metadata.get('/CreationDate', ''),
+                'modification_date': metadata.get('/ModDate', '')
+            },
+            'timestamp': datetime.now().isoformat()
+        }
+
+        # Lưu thông tin debug
+        debug_info_path = os.path.join(debug_dir, 'debug_info.json')
+        print(f"Saving debug info to: {debug_info_path}")
+        with open(debug_info_path, 'w') as f:
+            json.dump(debug_info, f, indent=2)
+        print(f"Successfully saved debug info: {debug_info}")
+
+        return output_path, signature_b64
+
+    except Exception as e:
+        print(f"Error in sign_pdf_and_embed_signature: {e}")
+        return None, None
+
+def verify_pdf_with_embedded_signature(pdf_path, public_key):
+    """Xác thực file PDF đã nhúng signature ở trường /Subject với placeholder."""
+    try:
+        # Đọc signature từ metadata
+        reader = PdfReader(pdf_path)
+        metadata = reader.metadata or {}
+        print('Metadata khi xác thực:', metadata)
+        signature_b64 = metadata.get('/Subject')
+        if not signature_b64:
+            print("Không tìm thấy signature trong metadata PDF (/Subject).")
+            return False
+        signature = base64.b64decode(signature_b64)
+
+        # Debug: In signature
+        print('Signature from PDF:', signature_b64)
+        print('Signature length:', len(signature))
+
+        # Thay /Subject về lại placeholder (dùng TextStringObject)
+        metadata[NameObject('/Subject')] = TextStringObject(SIGNATURE_PLACEHOLDER)
+        writer = PdfWriter()
+        writer.append_pages_from_reader(reader)
+        writer.add_metadata(metadata)
+        import io
+        buf = io.BytesIO()
+        writer.write(buf)
+        pdf_bytes_with_placeholder = buf.getvalue()
+
+        # Debug: In bytes
+        print('Original PDF size:', os.path.getsize(pdf_path))
+        print('PDF with placeholder size:', len(pdf_bytes_with_placeholder))
+
+        # Lưu file PDF với placeholder để debug
+        debug_dir = os.path.join(os.path.dirname(pdf_path), 'debug')
+        print(f"Creating debug directory at: {debug_dir}")
+        os.makedirs(debug_dir, exist_ok=True)
+        placeholder_path = os.path.join(debug_dir, 'pdf_with_placeholder_backend_verify.pdf')
+        print(f"Saving placeholder PDF to: {placeholder_path}")
+        with open(placeholder_path, 'wb') as f:
+            f.write(pdf_bytes_with_placeholder)
+        print(f"Successfully saved placeholder PDF, size: {len(pdf_bytes_with_placeholder)} bytes")
+
+        # Debug: In key bytes
+        print('Public key length:', len(public_key))
+
+        # Xác thực
+        is_valid = ML_DSA_44.verify(public_key, pdf_bytes_with_placeholder, signature)
+        print(f'Kết quả xác thực: {is_valid}')
+
+        # Tạo thông tin debug
+        debug_info = {
+            'original_pdf_size': os.path.getsize(pdf_path),
+            'placeholder_pdf_size': len(pdf_bytes_with_placeholder),
+            'signature_length': len(signature),
+            'public_key_length': len(public_key),
+            'metadata': {
+                'title': metadata.get('/Title', ''),
+                'author': metadata.get('/Author', ''),
+                'subject': metadata.get('/Subject', ''),
+                'creator': metadata.get('/Creator', ''),
+                'producer': metadata.get('/Producer', ''),
+                'creation_date': metadata.get('/CreationDate', ''),
+                'modification_date': metadata.get('/ModDate', '')
+            },
+            'timestamp': datetime.now().isoformat()
+        }
+
+        # Lưu thông tin debug
+        debug_info_path = os.path.join(debug_dir, 'debug_info_verify.json')
+        print(f"Saving debug info to: {debug_info_path}")
+        with open(debug_info_path, 'w') as f:
+            json.dump(debug_info, f, indent=2)
+        print(f"Successfully saved debug info: {debug_info}")
+
+        return is_valid
+
+    except Exception as e:
+        print(f"Error in verify_pdf_with_embedded_signature: {e}")
+        return False 

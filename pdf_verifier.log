@@ -1,0 +1,12 @@
+2025-06-09 09:57:25,686 - INFO - \u1ee8ng d\u1ee5ng ð\xe3 kh\u1edfi ð\u1ed9ng
+2025-06-09 09:57:36,981 - INFO - Ð\xe3 ch\u1ecdn file PDF: D:/TestMoi.pdf
+2025-06-09 09:57:50,166 - ERROR - L\u1ed7i khi g\u1eedi request xác th\u1ef1c: 400 Client Error: Bad Request for url: http://localhost:8000/verify-pdf/
+2025-06-09 09:57:50,166 - ERROR - L\u1ed7i khi xác th\u1ef1c PDF: L\u1ed7i khi xác th\u1ef1c PDF: 400 Client Error: Bad Request for url: http://localhost:8000/verify-pdf/
+2025-06-09 10:01:25,571 - INFO - \u1ee8ng d\u1ee5ng ð\xe3 kh\u1edfi ð\u1ed9ng
+2025-06-09 10:01:33,635 - INFO - Ð\xe3 ch\u1ecdn file PDF: C:/Users/Admin/Downloads/signed (12).pdf
+2025-06-09 10:01:39,293 - ERROR - L\u1ed7i không xác ð\u1ecbnh: Không l\u1ea5y ðý\u1ee3c public key: 404 Client Error: Not Found for url: http://localhost:8000/get_public_key?signer_name=nguyen2
+2025-06-09 10:01:39,304 - ERROR - L\u1ed7i khi xác th\u1ef1c PDF: Không l\u1ea5y ðý\u1ee3c public key: 404 Client Error: Not Found for url: http://localhost:8000/get_public_key?signer_name=nguyen2
+2025-06-09 10:11:40,433 - INFO - \u1ee8ng d\u1ee5ng ð\xe3 kh\u1edfi ð\u1ed9ng
+2025-06-09 10:11:45,494 - INFO - Ð\xe3 ch\u1ecdn file PDF: C:/Users/Admin/Downloads/signed (12).pdf
+2025-06-09 10:11:51,956 - ERROR - L\u1ed7i khi g\u1eedi request xác th\u1ef1c: 500 Server Error: Internal Server Error for url: http://localhost:8000/verify-signature/
+2025-06-09 10:11:51,956 - ERROR - L\u1ed7i khi xác th\u1ef1c PDF: L\u1ed7i khi xác th\u1ef1c PDF: 500 Server Error: Internal Server Error for url: http://localhost:8000/verify-signature/
