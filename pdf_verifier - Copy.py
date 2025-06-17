@@ -358,9 +358,10 @@ class PDFVerifier(QMainWindow):
             QMessageBox.critical(self, "Lỗi", f"Lỗi khi lấy danh sách hóa đơn: {str(e)}")
 
     def download_and_verify_invoice(self, item):
-        """Tải và xác thực hóa đơn (đúng quy trình placeholder)"""
+        """Tải và xác thực hóa đơn"""
         invoice = item.data(Qt.UserRole)
         try:
+            # Tải invoice
             response = requests.get(
                 f"{self.API_BASE_URL}/download-invoice/{invoice['id']}"
             )
@@ -368,42 +369,112 @@ class PDFVerifier(QMainWindow):
             temp_path = os.path.join(os.path.expanduser("~"), "Downloads", f"invoice_{invoice['id']}.pdf")
             with open(temp_path, 'wb') as f:
                 f.write(response.content)
+            
             # Đọc file PDF đã ký
             reader = PdfReader(temp_path)
             metadata = reader.metadata
             if not metadata or '/Signature' not in metadata:
                 QMessageBox.warning(self, "Lỗi", "File PDF không có chữ ký")
                 return
-            signature_b64 = metadata['/Signature']
-            signer = metadata['/Signer']
-            sign_time = metadata['/SignTime']
-            # Lấy public key từ server
-            response = requests.get(
-                f"{self.API_BASE_URL}/get-public-key/",
-                params={'signer_name': signer}
+
+            # Lấy thông tin người ký
+            signer_seller = metadata.get('/Signer')
+            signature_b64_seller = metadata.get('/SignatureSeller')
+            sign_time_seller = metadata.get('/SignTimeSeller')
+
+            # Lấy certificate của người bán
+            response_cert = requests.get(
+                f"{self.API_BASE_URL}/get-certificate/",
+                params={'username': signer_seller}
             )
-            response.raise_for_status()
-            public_key = base64.b64decode(response.json()['public_key'])
-            # Tạo lại bytes PDF với placeholder
-            writer = PdfWriter()
+            response_cert.raise_for_status()
+            seller_certificate = response_cert.json()['certificate']
+
+            # Xác minh certificate
+            if not verify_certificate(seller_certificate):
+                QMessageBox.warning(self, "Lỗi", "Certificate của người bán không hợp lệ")
+                return
+
+            # Lấy public key từ certificate đã xác minh
+            public_key_seller = base64.b64decode(seller_certificate['payload']['public_key'])
+            
+            # Tạo lại bytes PDF với placeholder để xác thực chữ ký
+            writer_temp_seller = PdfWriter()
             for page in reader.pages:
-                writer.add_page(page)
-            metadata2 = dict(metadata)
-            metadata2['/Signature'] = '__SIGNATURE_PLACEHOLDER__'
-            writer.add_metadata(metadata2)
-            buf = io.BytesIO()
-            writer.write(buf)
-            pdf_bytes_with_placeholder = buf.getvalue()
-            # Xác thực chữ ký
-            signature = base64.b64decode(signature_b64)
-            is_valid = ML_DSA_44.verify(public_key, pdf_bytes_with_placeholder, signature)
-            if is_valid:
-                QMessageBox.information(
-                    self, "Thành công",
-                    f"Xác thực thành công!\nNgười ký: {signer}\nThời gian: {sign_time}"
-                )
+                writer_temp_seller.add_page(page)
+            metadata_temp_seller = dict(metadata)
+            metadata_temp_seller['/SignatureSeller'] = '__SIGNATURE_PLACEHOLDER_SELLER__'
+            writer_temp_seller.add_metadata(metadata_temp_seller)
+            buf_seller = io.BytesIO()
+            writer_temp_seller.write(buf_seller)
+            pdf_bytes_with_placeholder_seller = buf_seller.getvalue()
+            
+            # Xác minh chữ ký
+            signature_seller = base64.b64decode(signature_b64_seller)
+            is_valid_seller_signature = ML_DSA_44.verify(public_key_seller, pdf_bytes_with_placeholder_seller, signature_seller)
+
+            # Kiểm tra chữ ký người mua (nếu có)
+            is_valid_buyer_signature = False
+            buyer_name_from_metadata = metadata.get('/Buyer')
+            signature_b64_buyer = metadata.get('/Signature')
+            sign_time_buyer = metadata.get('/SignTime')
+
+            if buyer_name_from_metadata and signature_b64_buyer:
+                try:
+                    # Lấy certificate của người mua
+                    response_buyer_cert = requests.get(
+                        f"{self.API_BASE_URL}/get-certificate/",
+                        params={'username': buyer_name_from_metadata}
+                    )
+                    response_buyer_cert.raise_for_status()
+                    buyer_certificate = response_buyer_cert.json()['certificate']
+
+                    # Xác minh certificate của người mua
+                    if not verify_certificate(buyer_certificate):
+                        QMessageBox.warning(self, "Lỗi", "Certificate của người mua không hợp lệ")
+                        return
+
+                    # Lấy public key từ certificate đã xác minh
+                    public_key_buyer = base64.b64decode(buyer_certificate['payload']['public_key'])
+
+                    # Tạo lại bytes PDF để xác thực chữ ký người mua
+                    writer_temp_buyer = PdfWriter()
+                    for i in range(len(reader.pages) - 1):
+                        writer_temp_buyer.add_page(reader.pages[i])
+
+                    metadata_temp_buyer = dict(metadata)
+                    if '/SignatureSeller' in metadata_temp_buyer:
+                        del metadata_temp_buyer['/SignatureSeller']
+                    if '/Signer' in metadata_temp_buyer:
+                        del metadata_temp_buyer['/Signer']
+                    if '/SignTimeSeller' in metadata_temp_buyer:
+                        del metadata_temp_buyer['/SignTimeSeller']
+                    
+                    metadata_temp_buyer['/Signature'] = '__SIGNATURE_PLACEHOLDER__'
+                    writer_temp_buyer.add_metadata(metadata_temp_buyer)
+                    buf_buyer = io.BytesIO()
+                    writer_temp_buyer.write(buf_buyer)
+                    pdf_bytes_with_placeholder_buyer = buf_buyer.getvalue()
+
+                    signature_buyer = base64.b64decode(signature_b64_buyer)
+                    is_valid_buyer_signature = ML_DSA_44.verify(public_key_buyer, pdf_bytes_with_placeholder_buyer, signature_buyer)
+                except Exception as ex:
+                    print(f"Lỗi khi xác thực chữ ký người mua: {ex}")
+                    is_valid_buyer_signature = False
+
+            # Hiển thị kết quả
+            msg_text = f"Kết quả xác thực Hóa đơn:\n"
+            msg_text += f"Người bán (ký Invoice): {signer_seller} - Thời gian: {sign_time_seller}\n"
+            msg_text += f"Chữ ký người bán: {'HỢP LỆ' if is_valid_seller_signature else 'KHÔNG HỢP LỆ'}\n"
+
+            if buyer_name_from_metadata:
+                msg_text += f"\nNgười mua (ký Order): {buyer_name_from_metadata} - Thời gian: {sign_time_buyer}\n"
+                msg_text += f"Chữ ký người mua: {'HỢP LỆ' if is_valid_buyer_signature else 'KHÔNG HỢP LỆ'}\n"
             else:
-                QMessageBox.warning(self, "Lỗi", "Xác thực thất bại: Chữ ký không hợp lệ")
+                msg_text += "\nKhông tìm thấy thông tin chữ ký của người mua trong Invoice.\n"
+
+            QMessageBox.information(self, "Kết quả xác thực Hóa đơn", msg_text)
+
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", f"Lỗi khi tải và xác thực hóa đơn: {str(e)}")
 

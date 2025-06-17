@@ -6,15 +6,16 @@ import os
 import json
 from .models import Signature, KeyPair
 from .utils import (
-    generate_keys, save_keys,
-    sign_document, verify_signature,
-    load_private_key, load_public_key,
-    sign_pdf_and_embed_signature, verify_pdf_with_embedded_signature
+    verify_proof_of_possession, create_certificate
 )
 import tempfile
 from datetime import datetime
 from dilithium_py.ml_dsa import ML_DSA_44
 import traceback
+import base64
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+import hashlib
 
 # Tạo thư mục lưu hóa đơn nếu chưa tồn tại
 INVOICES_DIR = os.path.join(settings.BASE_DIR, 'invoices')
@@ -27,216 +28,6 @@ os.makedirs(ORDERS_DIR, exist_ok=True)
 def index(request):
     return render(request, 'signature/index.html')
 
-@csrf_exempt
-def generate_key_pair(request):
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            signer_name = data.get('signer_name')
-            password = data.get('password')
-            
-            if not all([signer_name, password]):
-                return JsonResponse({'error': 'Signer name and password are required'}, status=400)
-            
-            print(f"Generating keys for {signer_name}")  # Debug log
-            
-            # Generate new key pair
-            public_key_bytes, secret_key_bytes = generate_keys(password, signer_name)
-            
-            if public_key_bytes and secret_key_bytes:
-                print(f"Keys generated successfully for {signer_name}")  # Debug log
-                return JsonResponse({
-                    'message': 'Key pair generated successfully',
-                    'public_key_file': f"{signer_name}.public.pem",
-                    'private_key_file': f"{signer_name}.private.pem"
-                })
-            else:
-                print(f"Failed to generate keys for {signer_name}")  # Debug log
-                return JsonResponse({'error': 'Failed to generate keys'}, status=500)
-                
-        except Exception as e:
-            print(f"Error in generate_key_pair: {str(e)}")  # Debug log
-            return JsonResponse({'error': str(e)}, status=500)
-    
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-@csrf_exempt
-def sign_document_view(request):
-    if request.method == 'POST':
-        try:
-            print("Received sign document request")  # Debug log
-            data = json.loads(request.body)
-            print(f"Request data: {data}")  # Debug log
-            
-            signer_name = data.get('signer_name')
-            password = data.get('password')
-            document_path = data.get('document_path')
-            
-            if not all([signer_name, password, document_path]):
-                print("Missing required fields")  # Debug log
-                return JsonResponse({'error': 'Signer name, password and document path are required'}, status=400)
-            
-            print(f"Loading private key for {signer_name}")  # Debug log
-            
-            # Load private key
-            secret_key_bytes = load_private_key(password, signer_name)
-            
-            if not secret_key_bytes:
-                print("Failed to load private key")  # Debug log
-                return JsonResponse({
-                    'error': 'Failed to load private key. Please make sure you have generated keys first and the signer name is correct.'
-                }, status=500)
-            
-            print("Private key loaded successfully")  # Debug log
-            
-            # Sign document
-            signature_data = sign_document(secret_key_bytes, document_path, signer_name)
-            
-            if signature_data:
-                print("Document signed successfully")  # Debug log
-                return JsonResponse({
-                    'message': 'Document signed successfully',
-                    'signature_data': signature_data
-                })
-            else:
-                print("Failed to sign document")  # Debug log
-                return JsonResponse({
-                    'error': 'Failed to sign document. Please check if the document exists and you have the correct permissions.'
-                }, status=500)
-                
-        except Exception as e:
-            print(f"Error in sign_document_view: {str(e)}")  # Debug log
-            print(traceback.format_exc())  # Print full traceback
-            return JsonResponse({'error': str(e)}, status=500)
-    
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-@csrf_exempt
-def verify_signature_view(request):
-    if request.method == 'POST':
-        try:
-            print("Received verify signature request")  # Debug log
-            data = json.loads(request.body)
-            print(f"Request data: {data}")  # Debug log
-            
-            signer_name = data.get('signer_name')
-            document_path = data.get('document_path')
-            
-            if not all([signer_name, document_path]):
-                print("Missing required fields")  # Debug log
-                return JsonResponse({'error': 'Signer name and document path are required'}, status=400)
-            
-            print(f"Loading public key for {signer_name}")  # Debug log
-            
-            # Load public key
-            public_key_bytes = load_public_key(signer_name)
-            
-            if not public_key_bytes:
-                print("Failed to load public key")  # Debug log
-                return JsonResponse({
-                    'error': 'Failed to load public key. Please make sure you have generated keys first and the signer name is correct.'
-                }, status=500)
-            
-            print("Public key loaded successfully")  # Debug log
-            
-            # Get signature from database
-            try:
-                from .models import Signature
-                signature = Signature.objects.get(
-                    signer_name=signer_name,
-                    document_path=document_path
-                    
-                )
-                signature_data = signature.signature_data
-                
-            except Signature.DoesNotExist:
-                print("Signature not found in database")  # Debug log
-                return JsonResponse({
-                    'error': 'No signature found for this document and signer.'
-                }, status=404)
-            
-            # Verify signature
-            verification_result = verify_signature(
-                public_key_bytes,
-                document_path,
-                signature_data
-            )
-            
-            if verification_result:
-                print("Signature verification completed")  # Debug log
-                return JsonResponse({
-                    'message': 'Signature verification completed',
-                    'result': verification_result,
-                    'timestamp': signature.created_at,
-                    'signer': signature.signer_name
-                })
-            else:
-                print("Failed to verify signature")  # Debug log
-                return JsonResponse({
-                    'error': 'Failed to verify signature. Please check if the document exists and you have the correct permissions.'
-                }, status=500)
-                
-        except Exception as e:
-            print(f"Error in verify_signature_view: {str(e)}")  # Debug log
-            print(traceback.format_exc())  # Print full traceback
-            return JsonResponse({'error': str(e)}, status=500)
-    
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-@csrf_exempt
-def sign_pdf(request):
-    if request.method == 'POST':
-        try:
-            pdf_file = request.FILES.get('pdf')
-            signer_name = request.POST.get('signer_name')
-            password = request.POST.get('password')
-            if not pdf_file or not signer_name or not password:
-                return JsonResponse({'error': 'Thiếu thông tin đầu vào.'}, status=400)
-            # Lưu file tạm
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_in:
-                tmp_in.write(pdf_file.read())
-                tmp_in_path = tmp_in.name
-            # Load private key
-            private_key = load_private_key(password, signer_name)
-            if not private_key:
-                os.remove(tmp_in_path)
-                return JsonResponse({'error': 'Không load được private key.'}, status=400)
-            # Ký và nhúng signature
-            tmp_out_path = tmp_in_path + '.signed.pdf'
-            signed_pdf_path, _ = sign_pdf_and_embed_signature(tmp_in_path, private_key, tmp_out_path)
-            if not signed_pdf_path:
-                os.remove(tmp_in_path)
-                return JsonResponse({'error': 'Ký PDF thất bại.'}, status=500)
-            # Trả file PDF đã ký
-            f = open(signed_pdf_path, 'rb')
-            response = FileResponse(f, as_attachment=True, filename='signed_' + pdf_file.name)
-            os.remove(tmp_in_path)
-            return response
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-@csrf_exempt
-def verify_pdf(request):
-    if request.method == 'POST':
-        try:
-            pdf_file = request.FILES.get('pdf')
-            public_key_b64 = request.POST.get('public_key')
-            if not pdf_file or not public_key_b64:
-                return JsonResponse({'error': 'Thiếu thông tin đầu vào.'}, status=400)
-            import base64
-            public_key = base64.b64decode(public_key_b64.replace('\n', '').replace(' ', ''))
-            # Lưu file tạm
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_in:
-                tmp_in.write(pdf_file.read())
-                tmp_in_path = tmp_in.name
-            # Xác thực
-            is_valid = verify_pdf_with_embedded_signature(tmp_in_path, public_key)
-            os.remove(tmp_in_path)
-            return JsonResponse({'is_valid': is_valid})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 @csrf_exempt
 def check_user(request):
@@ -246,17 +37,17 @@ def check_user(request):
         if not username:
             return JsonResponse({'error': 'Username is required'}, status=400)
             
-        # Kiểm tra public key file tồn tại và đọc vai trò
-        public_key_path = os.path.join('keys', f"{username}.public.pem")
-        if os.path.exists(public_key_path):
+        # Kiểm tra certificate file tồn tại và đọc vai trò
+        certificate_path = os.path.join('certificates', f"{username}_cert.json")
+        if os.path.exists(certificate_path):
             try:
-                with open(public_key_path, 'r') as f:
-                    key_data = json.load(f)
-                    role = key_data.get('role')  # Lấy vai trò từ file
+                with open(certificate_path, 'r') as f:
+                    certificate = json.load(f)
+                    role = certificate['payload']['role']  # Lấy vai trò từ certificate
                 return JsonResponse({'message': 'User exists', 'role': role})  # Trả về vai trò
             except Exception as e:
                 # Ghi log lỗi nếu không đọc được file hoặc thiếu trường role
-                print(f"Error reading public key file for user {username}: {str(e)}")
+                print(f"Error reading certificate file for user {username}: {str(e)}")
                 return JsonResponse({'error': f'Could not read user data for {username}'}, status=500)
         else:
             return JsonResponse({'message': 'User not found'})
@@ -373,21 +164,7 @@ def download_invoice(request, invoice_id):
 
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
-@csrf_exempt
-def get_public_key(request):
-    """Trả về public key và role của user"""
-    if request.method == 'GET':
-        signer_name = request.GET.get('signer_name')
-        if not signer_name:
-            return JsonResponse({'error': 'Missing signer_name'}, status=400)
-        public_key_path = os.path.join('keys', f"{signer_name}.public.pem")
-        if not os.path.exists(public_key_path):
-            return JsonResponse({'error': 'Public key not found'}, status=404)
-        with open(public_key_path, 'r') as f:
-            data = json.load(f)
-        # Trả về cả public key và role
-        return JsonResponse({'public_key': data['public_key'], 'role': data.get('role')})
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
 
 @csrf_exempt
 def upload_order(request):
@@ -494,38 +271,79 @@ def download_order(request, order_id):
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
-@csrf_exempt
+@api_view(['POST'])
 def register(request):
-    """Đăng ký user mới và lưu public key cùng với vai trò"""
-    if request.method == 'POST':
+    try:
+        data = request.data
+        
+        if not all(key in data for key in ['public_key', 'payload', 'signature']):
+            return Response({
+                'error': 'Missing required fields',
+                'received_fields': list(data.keys())
+            }, status=400)
+            
         try:
-            data = json.loads(request.body)
-            username = data.get('username')
-            public_key = data.get('public_key')
-            role = data.get('role')  # Lấy vai trò từ request
-
-            if not all([username, public_key, role]):  # Kiểm tra cả vai trò
-                return JsonResponse({'error': 'Username, public key, and role are required'}, status=400)
-
-            # Tạo thư mục keys nếu chưa tồn tại
-            keys_dir = os.path.join(settings.BASE_DIR, 'keys')
-            os.makedirs(keys_dir, exist_ok=True)
-
-            # Lưu public key và role vào file
-            public_key_path = os.path.join(keys_dir, f"{username}.public.pem")
-            with open(public_key_path, 'w') as f:
-                json.dump({
-                    'public_key': public_key,
-                    'role': role  # Lưu vai trò
-                }, f)
-
-            return JsonResponse({
-                'message': 'Registration successful',
-                'username': username,
-                'role': role  # Trả về vai trò
-            })
-
+            public_key = base64.b64decode(data['public_key'])
+            payload = data['payload']
+            signature = base64.b64decode(data['signature'])
         except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
+            return Response({
+                'error': f'Invalid data format: {str(e)}'
+            }, status=400)
+        
+        # Verify proof of possession
+        if not verify_proof_of_possession(public_key, payload, signature):
+            return Response({
+                'error': 'Invalid proof of possession'
+            }, status=400)
+            
+        try:
+            # Create certificate
+            certificate = create_certificate(payload['username'], public_key, payload['role'])
+            
+            # Read CA public key and create its hash
+            with open('keys/ca_public_key.pem', 'r') as f:
+                ca_key_data = json.load(f)  # Parse JSON data
+                ca_public_key = ca_key_data['public_key']
+                ca_public_key_bytes = base64.b64decode(ca_public_key)
+                # Sử dụng hashlib.sha256 thay vì ML_DSA_44.hash
+                ca_public_key_hash = hashlib.sha256(ca_public_key_bytes).digest()
+                
+            return Response({
+                'message': 'Registration successful',
+                'certificate': certificate,
+                'ca_public_key': ca_public_key,
+                'ca_public_key_hash': base64.b64encode(ca_public_key_hash).decode('utf-8')
+            })
+        except Exception as e:
+            print(f"Error in certificate creation: {str(e)}")
+            return Response({
+                'error': f'Certificate creation failed: {str(e)}'
+            }, status=400)
+            
+    except Exception as e:
+        print(f"Error in register: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        return Response({
+            'error': str(e)
+        }, status=400)
 
+@csrf_exempt
+def get_certificate(request):
+    """Lấy certificate của user"""
+    if request.method == 'GET':
+        username = request.GET.get('username')
+        if not username:
+            return JsonResponse({'error': 'Missing username'}, status=400)
+            
+        certificate_path = os.path.join(settings.BASE_DIR, 'certificates', f"{username}_cert.json")
+        if not os.path.exists(certificate_path):
+            return JsonResponse({'error': 'Certificate not found'}, status=404)
+            
+        with open(certificate_path, 'r') as f:
+            certificate = json.load(f)
+            
+        return JsonResponse({'certificate': certificate})
+        
     return JsonResponse({'error': 'Method not allowed'}, status=405)
