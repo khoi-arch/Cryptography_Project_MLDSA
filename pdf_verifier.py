@@ -25,6 +25,9 @@ from reportlab.lib.pagesizes import letter
 from io import BytesIO
 import tempfile
 import hashlib
+from docx import Document
+from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # Cấu hình logging
 logging.basicConfig(
@@ -145,15 +148,15 @@ class PDFVerifier(QMainWindow):
         
         self.sign_path = QLineEdit()
         self.sign_path.setReadOnly(True)
-        sign_select_btn = QPushButton("Chọn file PDF")
+        sign_select_btn = QPushButton("Chọn file DOCX")
         sign_select_btn.clicked.connect(self.select_sign_file)
         
-        sign_layout.addWidget(QLabel("File PDF:"))
+        sign_layout.addWidget(QLabel("File DOCX:"))
         sign_layout.addWidget(self.sign_path)
         sign_layout.addWidget(sign_select_btn)
         
-        sign_btn = QPushButton("Ký và Upload PDF")
-        sign_btn.clicked.connect(self.sign_and_upload_pdf)
+        sign_btn = QPushButton("Ký và Upload DOCX")
+        sign_btn.clicked.connect(self.sign_and_upload_docx)
         sign_layout.addWidget(sign_btn)
         
         sign_group.setLayout(sign_layout)
@@ -197,13 +200,13 @@ class PDFVerifier(QMainWindow):
         order_upload_layout = QVBoxLayout()
         self.order_sign_path = QLineEdit()
         self.order_sign_path.setReadOnly(True)
-        order_sign_select_btn = QPushButton("Chọn file Order PDF")
+        order_sign_select_btn = QPushButton("Chọn file Order DOCX")
         order_sign_select_btn.clicked.connect(self.select_order_sign_file)
-        order_upload_layout.addWidget(QLabel("File Order PDF:"))
+        order_upload_layout.addWidget(QLabel("File Order DOCX:"))
         order_upload_layout.addWidget(self.order_sign_path)
         order_upload_layout.addWidget(order_sign_select_btn)
-        order_sign_btn = QPushButton("Ký và Upload Order PDF")
-        order_sign_btn.clicked.connect(self.sign_and_upload_order_pdf)
+        order_sign_btn = QPushButton("Ký và Upload Order DOCX")
+        order_sign_btn.clicked.connect(self.sign_and_upload_order_docx)
         order_upload_layout.addWidget(order_sign_btn)
         order_upload_group.setLayout(order_upload_layout)
         buyer_layout.addWidget(order_upload_group)
@@ -286,21 +289,21 @@ class PDFVerifier(QMainWindow):
             QMessageBox.warning(self, "Lỗi", "Vai trò người dùng không xác định. Vui lòng liên hệ quản trị viên.")
 
     def select_sign_file(self):
-        """Chọn file PDF để ký"""
+        """Chọn file DOCX để ký"""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn file PDF", "", "PDF files (*.pdf)"
+            self, "Chọn file DOCX", "", "Word Documents (*.docx)"
         )
         if file_path:
             self.sign_path.setText(file_path)
 
-    def sign_and_upload_pdf(self):
-        """Ký và upload file PDF"""
+    def sign_and_upload_docx(self):
+        """Ký và upload file DOCX"""
         if not self.current_user:
             QMessageBox.warning(self, "Lỗi", "Vui lòng đăng nhập trước")
             return
         file_path = self.sign_path.text()
         if not file_path:
-            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn file PDF")
+            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn file DOCX")
             return
         password, ok = QInputDialog.getText(
             self, "Nhập mật khẩu", "Mật khẩu:", QLineEdit.Password
@@ -325,68 +328,62 @@ class PDFVerifier(QMainWindow):
                 QMessageBox.critical(self, "Lỗi", f"Không thể lấy public key từ server: {str(e)}")
                 return
 
-            # Bước 1: Đọc PDF gốc và thêm placeholder metadata
-            reader = PdfReader(file_path)
-            writer = PdfWriter()
-            for page in reader.pages:
-                writer.add_page(page)
-            metadata = reader.metadata or {}
-            metadata = {str(k): str(v) for k, v in metadata.items()}
-            metadata['/Signer'] = self.current_user
-            metadata['/Signature'] = '__SIGNATURE_PLACEHOLDER__' # Placeholder
-            metadata['/SignTime'] = datetime.now().isoformat()
-            writer.add_metadata(metadata)
+            # Bước 1: Đọc DOCX gốc và tạo metadata
+            doc = Document(file_path)
+            
+            # Tạo metadata cho document
+            metadata = {
+                'signer': self.current_user,
+                'signature': '__SIGNATURE_PLACEHOLDER__',  # Placeholder
+                'sign_time': datetime.now().isoformat()
+            }
+            
+            # Thêm metadata vào document properties
+            doc.core_properties.author = self.current_user
+            doc.core_properties.comments = json.dumps(metadata)
 
-            # Lưu PDF này vào một tệp tạm thời để thêm QR code
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf_with_metadata:
-                writer.write(tmp_pdf_with_metadata)
-                tmp_pdf_with_metadata_path = tmp_pdf_with_metadata.name
+            # Lưu DOCX với metadata vào file tạm thời
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_docx_with_metadata:
+                doc.save(tmp_docx_with_metadata.name)
+                tmp_docx_with_metadata_path = tmp_docx_with_metadata.name
 
             # Bước 2: Tạo mã QR
-            qr_image = self.create_qr_code(public_key, self.current_user, metadata['/SignTime'])
+            qr_image = self.create_qr_code(public_key, self.current_user, metadata['sign_time'])
             
-            # Bước 3: Thêm mã QR vào PDF (giữ lại metadata)
-            # Hàm add_qr_to_pdf sẽ trả về đường dẫn của file PDF mới đã có QR
-            pdf_path_with_qr_and_placeholder_signature = self.add_qr_to_pdf(tmp_pdf_with_metadata_path, qr_image)
+            # Bước 3: Thêm mã QR vào DOCX
+            docx_path_with_qr_and_placeholder_signature = self.add_qr_to_docx(tmp_docx_with_metadata_path, qr_image)
             
             # Xóa file tạm thời ban đầu
-            os.remove(tmp_pdf_with_metadata_path)
+            os.remove(tmp_docx_with_metadata_path)
 
-            # Bước 4: Đọc lại file PDF đã có QR (và placeholder signature) để ký
-            with open(pdf_path_with_qr_and_placeholder_signature, 'rb') as f_to_sign:
+            # Bước 4: Đọc lại file DOCX đã có QR để ký
+            with open(docx_path_with_qr_and_placeholder_signature, 'rb') as f_to_sign:
                 bytes_to_sign = f_to_sign.read()
 
-            # Bước 5: Ký trên bytes của PDF đã có QR (và placeholder signature)
+            # Bước 5: Ký trên bytes của DOCX đã có QR
             signature = ML_DSA_44.sign(private_key, bytes_to_sign)
             signature_b64 = base64.b64encode(signature).decode('utf-8')
             
-            # Bước 6: Cập nhật chữ ký thật vào metadata của file PDF đã có QR
-            reader_final = PdfReader(pdf_path_with_qr_and_placeholder_signature)
-            writer_final = PdfWriter()
-            for page in reader_final.pages:
-                writer_final.add_page(page)
+            # Bước 6: Cập nhật chữ ký thật vào document properties
+            doc_final = Document(docx_path_with_qr_and_placeholder_signature)
+            metadata_final = json.loads(doc_final.core_properties.comments or '{}')
+            metadata_final['signature'] = signature_b64  # Cập nhật chữ ký thật
+            doc_final.core_properties.comments = json.dumps(metadata_final)
             
-            # Sao chép metadata hiện có (bao gồm QR và các thông tin khác)
-            metadata_final = reader_final.metadata or {}
-            metadata_final = {str(k): str(v) for k, v in metadata_final.items()}
-            metadata_final['/Signature'] = signature_b64 # Cập nhật chữ ký thật
-            writer_final.add_metadata(metadata_final)
-            
-            # Lưu file PDF cuối cùng
-            final_pdf_path_for_upload = file_path.replace('.pdf', '_signed_with_qr.pdf')
-            with open(final_pdf_path_for_upload, 'wb') as f_final:
-                writer_final.write(f_final)
+            # Lưu file DOCX cuối cùng
+            final_docx_path_for_upload = file_path.replace('.docx', '_signed_with_qr.docx')
+            doc_final.save(final_docx_path_for_upload)
             
             # Xóa file tạm thời có QR và placeholder signature
-            os.remove(pdf_path_with_qr_and_placeholder_signature)
+            os.remove(docx_path_with_qr_and_placeholder_signature)
 
             # Upload file đã ký và có QR lên server
-            with open(final_pdf_path_for_upload, 'rb') as f:
-                files = {'pdf': f}
+            with open(final_docx_path_for_upload, 'rb') as f:
+                files = {'pdf': f}  # Giữ nguyên tên field để tương thích với server
                 data = {
                     'signer_name': self.current_user,
                     'signature': signature_b64,
-                    'timestamp': metadata['/SignTime']
+                    'timestamp': metadata['sign_time']
                 }
                 response = requests.post(
                     f"{self.API_BASE_URL}/upload-invoice/",
@@ -397,12 +394,12 @@ class PDFVerifier(QMainWindow):
             
             QMessageBox.information(
                 self, "Thành công",
-                f"Ký và upload PDF thành công. File đã ký được lưu tại:\n{final_pdf_path_for_upload}"
+                f"Ký và upload DOCX thành công. File đã ký được lưu tại:\n{final_docx_path_for_upload}"
             )
             self.sign_path.clear()
             
         except Exception as e:
-            QMessageBox.critical(self, "Lỗi", f"Lỗi khi ký và upload PDF: {str(e)}")
+            QMessageBox.critical(self, "Lỗi", f"Lỗi khi ký và upload DOCX: {str(e)}")
 
     def refresh_invoice_list(self):
         """Làm mới danh sách hóa đơn"""
@@ -429,7 +426,7 @@ class PDFVerifier(QMainWindow):
             QMessageBox.critical(self, "Lỗi", f"Lỗi khi lấy danh sách hóa đơn: {str(e)}")
 
     def download_and_verify_invoice(self, item):
-        """Tải và xác thực hóa đơn"""
+        """Tải và xác thực hóa đơn DOCX"""
         invoice = item.data(Qt.UserRole)
         try:
             # Tải invoice
@@ -438,21 +435,24 @@ class PDFVerifier(QMainWindow):
             )
             response.raise_for_status()
             
-            temp_path = os.path.join(os.path.expanduser("~"), "Downloads", f"invoice_{invoice['id']}_from_{invoice['signer_name']}.pdf")
+            temp_path = os.path.join(os.path.expanduser("~"), "Downloads", f"invoice_{invoice['id']}_from_{invoice['signer_name']}.docx")
             with open(temp_path, 'wb') as f:
                 f.write(response.content)
             
-            # Đọc file PDF đã ký
-            reader = PdfReader(temp_path)
-            metadata = reader.metadata
-            if not metadata:
-                QMessageBox.warning(self, "Lỗi", "File PDF không có metadata.")
+            # Đọc file DOCX đã ký
+            doc = Document(temp_path)
+            metadata_str = doc.core_properties.comments
+            if not metadata_str:
+                QMessageBox.warning(self, "Lỗi", "File DOCX không có metadata.")
                 return
 
+            # Parse metadata
+            metadata = json.loads(metadata_str)
+
             # Lấy thông tin người ký
-            signer_seller = metadata.get('/Signer')
-            signature_b64_seller = metadata.get('/SignatureSeller')
-            sign_time_seller = metadata.get('/SignTimeSeller')
+            signer_seller = metadata.get('signer')
+            signature_b64_seller = metadata.get('signature')
+            sign_time_seller = metadata.get('sign_time')
 
             # Lấy certificate của người bán
             response_cert = requests.get(
@@ -470,85 +470,37 @@ class PDFVerifier(QMainWindow):
             # Lấy public key từ certificate đã xác minh
             public_key_seller = base64.b64decode(seller_certificate['payload']['public_key'])
             
-            # Tạo lại bytes PDF với placeholder để xác thực chữ ký
-            writer_temp_seller = PdfWriter()
-            for page in reader.pages:
-                writer_temp_seller.add_page(page)
+            # Tạo lại bytes DOCX với placeholder để xác thực chữ ký
+            doc_temp_seller = Document(temp_path)
             metadata_temp_seller = dict(metadata)
-            metadata_temp_seller['/SignatureSeller'] = '__SIGNATURE_PLACEHOLDER_SELLER__'
-            writer_temp_seller.add_metadata(metadata_temp_seller)
-            buf_seller = io.BytesIO()
-            writer_temp_seller.write(buf_seller)
-            pdf_bytes_with_placeholder_seller = buf_seller.getvalue()
+            metadata_temp_seller['signature'] = '__SIGNATURE_PLACEHOLDER__'
+            doc_temp_seller.core_properties.comments = json.dumps(metadata_temp_seller)
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_file:
+                doc_temp_seller.save(tmp_file.name)
+                with open(tmp_file.name, 'rb') as f:
+                    docx_bytes_with_placeholder_seller = f.read()
+                os.remove(tmp_file.name)
             
             # Xác minh chữ ký
             signature_seller = base64.b64decode(signature_b64_seller)
-            is_valid_seller_signature = ML_DSA_44.verify(public_key_seller, pdf_bytes_with_placeholder_seller, signature_seller)
+            is_valid_seller_signature = ML_DSA_44.verify(public_key_seller, docx_bytes_with_placeholder_seller, signature_seller)
 
-            # Kiểm tra chữ ký người mua (nếu có)
-            is_valid_buyer_signature = False
-            buyer_name_from_metadata = metadata.get('/Buyer')
-            signature_b64_buyer = metadata.get('/Signature')
-            sign_time_buyer = metadata.get('/SignTime')
+            # Hiển thị kết quả xác thực
+            result_text = f"Kết quả xác thực hóa đơn:\n\n"
+            result_text += f"Người bán: {signer_seller}\n"
+            result_text += f"Thời gian ký: {sign_time_seller}\n"
+            result_text += f"Chữ ký người bán: {'Hợp lệ' if is_valid_seller_signature else 'Không hợp lệ'}\n\n"
 
-            if buyer_name_from_metadata and signature_b64_buyer:
-                try:
-                    # Lấy certificate của người mua
-                    response_buyer_cert = requests.get(
-                        f"{self.API_BASE_URL}/get-certificate/",
-                        params={'username': buyer_name_from_metadata}
-                    )
-                    response_buyer_cert.raise_for_status()
-                    buyer_certificate = response_buyer_cert.json()['certificate']
-
-                    # Xác minh certificate của người mua
-                    if not verify_certificate(buyer_certificate):
-                        QMessageBox.warning(self, "Lỗi", "Certificate của người mua không hợp lệ")
-                        return
-
-                    # Lấy public key từ certificate đã xác minh
-                    public_key_buyer = base64.b64decode(buyer_certificate['payload']['public_key'])
-
-                    # Tạo lại bytes PDF để xác thực chữ ký người mua
-                    writer_temp_buyer = PdfWriter()
-                    for i in range(len(reader.pages) - 1):
-                        writer_temp_buyer.add_page(reader.pages[i])
-
-                    metadata_temp_buyer = dict(metadata)
-                    if '/SignatureSeller' in metadata_temp_buyer:
-                        del metadata_temp_buyer['/SignatureSeller']
-                    if '/Signer' in metadata_temp_buyer:
-                        del metadata_temp_buyer['/Signer']
-                    if '/SignTimeSeller' in metadata_temp_buyer:
-                        del metadata_temp_buyer['/SignTimeSeller']
-                    
-                    metadata_temp_buyer['/Signature'] = '__SIGNATURE_PLACEHOLDER__'
-                    writer_temp_buyer.add_metadata(metadata_temp_buyer)
-                    buf_buyer = io.BytesIO()
-                    writer_temp_buyer.write(buf_buyer)
-                    pdf_bytes_with_placeholder_buyer = buf_buyer.getvalue()
-
-                    signature_buyer = base64.b64decode(signature_b64_buyer)
-                    is_valid_buyer_signature = ML_DSA_44.verify(public_key_buyer, pdf_bytes_with_placeholder_buyer, signature_buyer)
-                except Exception as ex:
-                    print(f"Lỗi khi xác thực chữ ký người mua: {ex}")
-                    is_valid_buyer_signature = False
-
-            # Hiển thị kết quả
-            msg_text = f"Kết quả xác thực Hóa đơn:\n"
-            msg_text += f"Người bán (ký Invoice): {signer_seller} - Thời gian: {sign_time_seller}\n"
-            msg_text += f"Chữ ký người bán: {'HỢP LỆ' if is_valid_seller_signature else 'KHÔNG HỢP LỆ'}\n"
-
-            if buyer_name_from_metadata:
-                msg_text += f"\nNgười mua (ký Order): {buyer_name_from_metadata} - Thời gian: {sign_time_buyer}\n"
-                msg_text += f"Chữ ký người mua: {'HỢP LỆ' if is_valid_buyer_signature else 'KHÔNG HỢP LỆ'}\n"
+            if is_valid_seller_signature:
+                result_text += "✅ Hóa đơn đã được xác thực thành công!"
             else:
-                msg_text += "\nKhông tìm thấy thông tin chữ ký của người mua trong Invoice.\n"
+                result_text += "❌ Hóa đơn không hợp lệ!"
 
-            QMessageBox.information(self, "Kết quả xác thực Hóa đơn", msg_text)
+            QMessageBox.information(self, "Kết quả xác thực", result_text)
 
         except Exception as e:
-            QMessageBox.critical(self, "Lỗi", f"Lỗi khi tải và xác thực hóa đơn: {str(e)}")
+            QMessageBox.critical(self, "Lỗi", f"Lỗi khi xác thực hóa đơn: {str(e)}")
 
     def get_key_paths(self, username=None):
         """Lấy đường dẫn đến file khóa"""
@@ -630,19 +582,21 @@ class PDFVerifier(QMainWindow):
             return None
 
     def select_order_sign_file(self):
+        """Chọn file Order DOCX để ký"""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn file Order PDF", "", "PDF files (*.pdf)"
+            self, "Chọn file Order DOCX", "", "Word Documents (*.docx)"
         )
         if file_path:
             self.order_sign_path.setText(file_path)
 
-    def sign_and_upload_order_pdf(self):
+    def sign_and_upload_order_docx(self):
+        """Bên mua ký và upload Order DOCX"""
         if not self.current_user:
             QMessageBox.warning(self, "Lỗi", "Vui lòng đăng nhập trước")
             return
         file_path = self.order_sign_path.text()
         if not file_path:
-            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn file PDF")
+            QMessageBox.warning(self, "Lỗi", "Vui lòng chọn file Order DOCX")
             return
         password, ok = QInputDialog.getText(
             self, "Nhập mật khẩu", "Mật khẩu:", QLineEdit.Password
@@ -655,58 +609,74 @@ class PDFVerifier(QMainWindow):
                 QMessageBox.critical(self, "Lỗi", "Không thể đọc private key")
                 return
 
-            # 1. Đọc PDF gốc và thêm placeholder metadata
-            reader = PdfReader(file_path)
-            writer = PdfWriter()
-            for page in reader.pages:
-                writer.add_page(page)
-            metadata = reader.metadata or {}
-            metadata = {str(k): str(v) for k, v in metadata.items()}
-            metadata['/Buyer'] = self.current_user
-            metadata['/Signature'] = '__SIGNATURE_PLACEHOLDER__' # Placeholder
-            metadata['/SignTime'] = datetime.now().isoformat()
-            writer.add_metadata(metadata)
+            # Lấy public key từ server
+            try:
+                response = requests.get(
+                    f"{self.API_BASE_URL}/get-public-key/",
+                    params={'signer_name': self.current_user}
+                )
+                response.raise_for_status()
+                public_key = base64.b64decode(response.json()['public_key'])
+            except Exception as e:
+                QMessageBox.critical(self, "Lỗi", f"Không thể lấy public key từ server: {str(e)}")
+                return
 
-            # Lưu PDF này vào một tệp tạm thời để ký
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf_with_metadata:
-                writer.write(tmp_pdf_with_metadata)
-                tmp_pdf_with_metadata_path = tmp_pdf_with_metadata.name
+            # Bước 1: Đọc DOCX gốc và tạo metadata
+            doc = Document(file_path)
+            
+            # Tạo metadata cho document
+            metadata = {
+                'buyer': self.current_user,
+                'signature': '__SIGNATURE_PLACEHOLDER__',  # Placeholder
+                'sign_time': datetime.now().isoformat()
+            }
+            
+            # Thêm metadata vào document properties
+            doc.core_properties.author = self.current_user
+            doc.core_properties.comments = json.dumps(metadata)
 
-            # 2. Đọc lại file PDF đã có placeholder signature để ký
-            with open(tmp_pdf_with_metadata_path, 'rb') as f_to_sign:
+            # Lưu DOCX với metadata vào file tạm thời
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_docx_with_metadata:
+                doc.save(tmp_docx_with_metadata.name)
+                tmp_docx_with_metadata_path = tmp_docx_with_metadata.name
+
+            # Bước 2: Tạo mã QR
+            qr_image = self.create_qr_code(public_key, self.current_user, metadata['sign_time'])
+            
+            # Bước 3: Thêm mã QR vào DOCX
+            docx_path_with_qr_and_placeholder_signature = self.add_qr_to_docx(tmp_docx_with_metadata_path, qr_image)
+            
+            # Xóa file tạm thời ban đầu
+            os.remove(tmp_docx_with_metadata_path)
+
+            # Bước 4: Đọc lại file DOCX đã có QR để ký
+            with open(docx_path_with_qr_and_placeholder_signature, 'rb') as f_to_sign:
                 bytes_to_sign = f_to_sign.read()
 
-            # 3. Ký trên bytes của PDF
+            # Bước 5: Ký trên bytes của DOCX đã có QR
             signature = ML_DSA_44.sign(private_key, bytes_to_sign)
             signature_b64 = base64.b64encode(signature).decode('utf-8')
             
-            # 4. Cập nhật chữ ký thật vào metadata của file PDF
-            reader_final = PdfReader(tmp_pdf_with_metadata_path)
-            writer_final = PdfWriter()
-            for page in reader_final.pages:
-                writer_final.add_page(page)
+            # Bước 6: Cập nhật chữ ký thật vào document properties
+            doc_final = Document(docx_path_with_qr_and_placeholder_signature)
+            metadata_final = json.loads(doc_final.core_properties.comments or '{}')
+            metadata_final['signature'] = signature_b64  # Cập nhật chữ ký thật
+            doc_final.core_properties.comments = json.dumps(metadata_final)
             
-            # Sao chép metadata hiện có
-            metadata_final = reader_final.metadata or {}
-            metadata_final = {str(k): str(v) for k, v in metadata_final.items()}
-            metadata_final['/Signature'] = signature_b64 # Cập nhật chữ ký thật
-            writer_final.add_metadata(metadata_final)
+            # Lưu file DOCX cuối cùng
+            final_docx_path_for_upload = file_path.replace('.docx', '_signed_with_qr.docx')
+            doc_final.save(final_docx_path_for_upload)
             
-            # Lưu file PDF cuối cùng
-            final_pdf_path_for_upload = file_path.replace('.pdf', '_order_signed.pdf') # Đổi tên file
-            with open(final_pdf_path_for_upload, 'wb') as f_final:
-                writer_final.write(f_final)
-            
-            # Xóa file tạm thời
-            os.remove(tmp_pdf_with_metadata_path)
+            # Xóa file tạm thời có QR và placeholder signature
+            os.remove(docx_path_with_qr_and_placeholder_signature)
 
-            # Upload file đã ký lên server
-            with open(final_pdf_path_for_upload, 'rb') as f: # Sử dụng final_pdf_path_for_upload
-                files = {'pdf': f}
+            # Upload file đã ký và có QR lên server
+            with open(final_docx_path_for_upload, 'rb') as f:
+                files = {'pdf': f}  # Giữ nguyên tên field để tương thích với server
                 data = {
                     'buyer_name': self.current_user,
                     'signature': signature_b64,
-                    'timestamp': metadata['/SignTime']
+                    'timestamp': metadata['sign_time']
                 }
                 response = requests.post(
                     f"{self.API_BASE_URL}/upload-order/",
@@ -717,13 +687,12 @@ class PDFVerifier(QMainWindow):
 
             QMessageBox.information(
                 self, "Thành công",
-                f"Ký và upload Order PDF thành công. File đã ký được lưu tại:\n{final_pdf_path_for_upload}"
+                f"Ký và upload Order DOCX thành công. File đã ký được lưu tại:\n{final_docx_path_for_upload}"
             )
             self.order_sign_path.clear()
-            self.refresh_my_order_list()
 
         except Exception as e:
-            QMessageBox.critical(self, "Lỗi", f"Lỗi khi ký và upload Order PDF: {str(e)}")
+            QMessageBox.critical(self, "Lỗi", f"Lỗi khi ký và upload Order DOCX: {str(e)}")
 
     def refresh_order_list(self):
         try:
@@ -739,77 +708,6 @@ class PDFVerifier(QMainWindow):
                 self.order_list.addItem(item)
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", f"Lỗi khi lấy danh sách order: {str(e)}")
-
-    def download_and_verify_order(self, item):
-        """Tải và xác thực order"""
-        order = item.data(Qt.UserRole)
-        try:
-            response = requests.get(
-                f"{self.API_BASE_URL}/download-order/{order['id']}"
-            )
-            response.raise_for_status()
-            
-            temp_path = os.path.join(os.path.expanduser("~"), "Downloads", f"order_{order['id']}_from_{order['buyer_name']}.pdf")
-            with open(temp_path, 'wb') as f:
-                f.write(response.content)
-            
-            # Đọc file PDF đã ký
-            reader = PdfReader(temp_path)
-            metadata = reader.metadata
-            if not metadata or '/Signature' not in metadata:
-                QMessageBox.warning(self, "Lỗi", "File PDF không có chữ ký")
-                return
-            
-            signature_b64 = metadata['/Signature']
-            buyer = metadata['/Buyer']
-            sign_time = metadata['/SignTime']
-            
-            # Lấy certificate của người mua
-            response_cert = requests.get(
-                f"{self.API_BASE_URL}/get-certificate/",
-                params={'username': buyer}
-            )
-            response_cert.raise_for_status()
-            buyer_certificate = response_cert.json()['certificate']
-
-            # Xác minh certificate
-            if not verify_certificate(buyer_certificate):
-                QMessageBox.warning(self, "Lỗi", "Certificate của người mua không hợp lệ")
-                return
-
-            # Lấy public key từ certificate đã xác minh
-            public_key_buyer = base64.b64decode(buyer_certificate['payload']['public_key'])
-            
-            # Tạo lại bytes PDF với placeholder để xác thực chữ ký
-            writer_temp = PdfWriter()
-            for page in reader.pages:
-                writer_temp.add_page(page)
-            metadata_temp = dict(metadata)
-            metadata_temp['/Signature'] = '__SIGNATURE_PLACEHOLDER__'
-            writer_temp.add_metadata(metadata_temp)
-            buf = io.BytesIO()
-            writer_temp.write(buf)
-            pdf_bytes_with_placeholder = buf.getvalue()
-            
-            signature = base64.b64decode(signature_b64)
-            is_valid_signature = ML_DSA_44.verify(public_key_buyer, pdf_bytes_with_placeholder, signature)
-            
-            if is_valid_signature:
-                reply = QMessageBox.information(
-                    self, "Xác thực Order thành công!",
-                    f"Order từ {buyer} - Thời gian: {sign_time}\n"
-                    f"Chữ ký của người mua hợp lệ.\n\nBạn có muốn ký và tạo Hóa đơn (Invoice) từ Order này không?",
-                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
-                )
-                if reply == QMessageBox.Yes:
-                    self.sign_downloaded_order_as_invoice(temp_path, buyer)
-                elif reply == QMessageBox.No:
-                    QMessageBox.information(self, "Thông báo", "Order đã được tải về và xác thực.")
-            else:
-                QMessageBox.warning(self, "Lỗi", "Xác thực thất bại: Chữ ký của người mua không hợp lệ.")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Lỗi", f"Lỗi khi tải và xác thực order: {str(e)}")
 
     def refresh_my_order_list(self):
         try:
@@ -993,7 +891,7 @@ class PDFVerifier(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", f"Lỗi khi đăng ký: {str(e)}")
 
-    def sign_downloaded_order_as_invoice(self, order_pdf_path, buyer_name):
+    def sign_downloaded_order_as_invoice(self, order_docx_path, buyer_name):
         """Người bán ký Order đã tải về và tạo Invoice với mã QR."""
         password, ok = QInputDialog.getText(
             self, "Nhập mật khẩu", "Mật khẩu của bạn:", QLineEdit.Password
@@ -1028,72 +926,67 @@ class PDFVerifier(QMainWindow):
                 QMessageBox.critical(self, "Lỗi", f"Không thể lấy certificate của bạn từ server: {str(e)}")
                 return
 
-            # Bước 1: Đọc Order PDF đã tải về và giữ lại metadata hiện có (chữ ký của người mua)
-            reader_order = PdfReader(order_pdf_path)
-            writer_invoice = PdfWriter()
-            for page in reader_order.pages:
-                writer_invoice.add_page(page)
+            # Bước 1: Đọc Order DOCX đã tải về và giữ lại metadata hiện có (chữ ký của người mua)
+            doc_order = Document(order_docx_path)
+            metadata_order_str = doc_order.core_properties.comments
+            metadata_order = json.loads(metadata_order_str) if metadata_order_str else {}
             
-            # Sao chép metadata hiện có (bao gồm chữ ký của người mua)
-            metadata_order = reader_order.metadata or {}
-            metadata_invoice = {str(k): str(v) for k, v in metadata_order.items()}
+            # Tạo metadata cho Invoice
+            metadata_invoice = {
+                'buyer': buyer_name,  # Giữ lại thông tin người mua
+                'buyer_signature': metadata_order.get('signature'),  # Giữ lại chữ ký người mua
+                'buyer_sign_time': metadata_order.get('sign_time'),  # Giữ lại thời gian ký của người mua
+                'seller': self.current_user,  # Thêm thông tin người bán
+                'seller_signature': '__SIGNATURE_PLACEHOLDER_SELLER__',  # Placeholder chữ ký người bán
+                'seller_sign_time': datetime.now().isoformat()  # Thời gian ký của người bán
+            }
             
-            # Thêm metadata của người bán (signer) và placeholder cho chữ ký mới
-            metadata_invoice['/Signer'] = self.current_user # Người bán ký
-            metadata_invoice['/SignatureSeller'] = '__SIGNATURE_PLACEHOLDER_SELLER__' # Placeholder chữ ký người bán
-            metadata_invoice['/SignTimeSeller'] = datetime.now().isoformat()
-            
-            writer_invoice.add_metadata(metadata_invoice)
+            # Cập nhật document properties
+            doc_order.core_properties.author = self.current_user
+            doc_order.core_properties.comments = json.dumps(metadata_invoice)
 
-            # Lưu PDF này vào một tệp tạm thời để thêm mã QR
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf_with_metadata_invoice:
-                writer_invoice.write(tmp_pdf_with_metadata_invoice)
-                tmp_pdf_with_metadata_invoice_path = tmp_pdf_with_metadata_invoice.name
+            # Lưu DOCX này vào một tệp tạm thời để thêm mã QR
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_docx_with_metadata_invoice:
+                doc_order.save(tmp_docx_with_metadata_invoice.name)
+                tmp_docx_with_metadata_invoice_path = tmp_docx_with_metadata_invoice.name
             
             # Bước 2: Tạo mã QR với thông tin của người bán
-            qr_image = self.create_qr_code(public_key_seller, self.current_user, metadata_invoice['/SignTimeSeller'])
+            qr_image = self.create_qr_code(public_key_seller, self.current_user, metadata_invoice['seller_sign_time'])
             
-            # Bước 3: Thêm mã QR vào PDF tạm thời
-            pdf_path_with_qr_and_placeholder_signature_seller = self.add_qr_to_pdf(tmp_pdf_with_metadata_invoice_path, qr_image)
+            # Bước 3: Thêm mã QR vào DOCX tạm thời
+            docx_path_with_qr_and_placeholder_signature_seller = self.add_qr_to_docx(tmp_docx_with_metadata_invoice_path, qr_image)
             
             # Xóa file tạm thời ban đầu
-            os.remove(tmp_pdf_with_metadata_invoice_path)
+            os.remove(tmp_docx_with_metadata_invoice_path)
 
-            # Bước 4: Đọc lại file PDF đã có QR và placeholder signature của người bán để ký
-            with open(pdf_path_with_qr_and_placeholder_signature_seller, 'rb') as f_to_sign_seller:
-                bytes_to_sign_seller = f_to_sign_seller.read()
+            # Bước 4: Đọc lại file DOCX đã có QR để ký
+            with open(docx_path_with_qr_and_placeholder_signature_seller, 'rb') as f_to_sign:
+                bytes_to_sign = f_to_sign.read()
 
-            # Bước 5: Ký trên bytes của PDF (đã có QR và chữ ký người mua)
-            signature_seller = ML_DSA_44.sign(private_key, bytes_to_sign_seller)
+            # Bước 5: Ký trên bytes của DOCX đã có QR
+            signature_seller = ML_DSA_44.sign(private_key, bytes_to_sign)
             signature_b64_seller = base64.b64encode(signature_seller).decode('utf-8')
             
-            # Bước 6: Cập nhật chữ ký thật của người bán vào metadata của file PDF
-            reader_final_invoice = PdfReader(pdf_path_with_qr_and_placeholder_signature_seller)
-            writer_final_invoice = PdfWriter()
-            for page in reader_final_invoice.pages:
-                writer_final_invoice.add_page(page)
+            # Bước 6: Cập nhật chữ ký thật vào document properties
+            doc_final_invoice = Document(docx_path_with_qr_and_placeholder_signature_seller)
+            metadata_final_invoice = json.loads(doc_final_invoice.core_properties.comments or '{}')
+            metadata_final_invoice['seller_signature'] = signature_b64_seller  # Cập nhật chữ ký thật
+            doc_final_invoice.core_properties.comments = json.dumps(metadata_final_invoice)
             
-            # Sao chép metadata hiện có (bao gồm QR, chữ ký người mua, và thông tin khác)
-            metadata_final_invoice = reader_final_invoice.metadata or {}
-            metadata_final_invoice = {str(k): str(v) for k, v in metadata_final_invoice.items()}
-            metadata_final_invoice['/SignatureSeller'] = signature_b64_seller # Cập nhật chữ ký người bán
-            writer_final_invoice.add_metadata(metadata_final_invoice)
-            
-            # Lưu file Invoice PDF cuối cùng
-            final_invoice_pdf_path = os.path.join(os.path.expanduser("~"), "Downloads", f"invoice_{buyer_name}_from_{self.current_user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
-            with open(final_invoice_pdf_path, 'wb') as f_final_invoice:
-                writer_final_invoice.write(f_final_invoice)
+            # Lưu file DOCX cuối cùng
+            final_invoice_docx_path = os.path.join(os.path.expanduser("~"), "Downloads", f"invoice_{buyer_name}_from_{self.current_user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx")
+            doc_final_invoice.save(final_invoice_docx_path)
             
             # Xóa file tạm thời có QR và placeholder signature
-            os.remove(pdf_path_with_qr_and_placeholder_signature_seller)
+            os.remove(docx_path_with_qr_and_placeholder_signature_seller)
 
-            # Upload Invoice PDF đã ký (và có QR) lên server
-            with open(final_invoice_pdf_path, 'rb') as f:
-                files = {'pdf': f}
+            # Upload Invoice DOCX đã ký (và có QR) lên server
+            with open(final_invoice_docx_path, 'rb') as f:
+                files = {'pdf': f}  # Giữ nguyên tên field để tương thích với server
                 data = {
                     'signer_name': self.current_user,
                     'signature': signature_b64_seller,
-                    'timestamp': metadata_invoice['/SignTimeSeller']
+                    'timestamp': metadata_invoice['seller_sign_time']
                 }
                 response = requests.post(
                     f"{self.API_BASE_URL}/upload-invoice/",
@@ -1104,12 +997,137 @@ class PDFVerifier(QMainWindow):
 
             QMessageBox.information(
                 self, "Thành công",
-                f"Đã ký Order và tạo Hóa đơn thành công. Hóa đơn được lưu tại:\n{final_invoice_pdf_path}"
+                f"Đã ký Order và tạo Hóa đơn thành công. Hóa đơn được lưu tại:\n{final_invoice_docx_path}"
             )
             self.refresh_order_list()
             
         except Exception as e:
             QMessageBox.critical(self, "Lỗi", f"Lỗi khi ký Order và tạo Hóa đơn: {str(e)}")
+
+    def add_qr_to_docx(self, docx_path, qr_image_bytes):
+        """Thêm mã QR vào cuối file Word DOCX"""
+        try:
+            # Đọc file DOCX gốc
+            doc = Document(docx_path)
+            
+            # Thêm một trang mới (section break) để chứa QR code
+            doc.add_page_break()
+            
+            # Thêm tiêu đề cho phần QR code
+            qr_heading = doc.add_heading('Digital Signature QR Code', level=1)
+            qr_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # Thêm đoạn văn bản mô tả
+            description = doc.add_paragraph('This QR code contains the digital signature information for this document.')
+            description.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # Lưu QR code vào file tạm thời
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_qr_file:
+                temp_qr_file.write(qr_image_bytes)
+                temp_qr_path = temp_qr_file.name
+            
+            # Thêm QR code vào document
+            qr_paragraph = doc.add_paragraph()
+            qr_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            qr_run = qr_paragraph.add_run()
+            qr_run.add_picture(temp_qr_path, width=Inches(2.5), height=Inches(2.5))
+            
+            # Xóa file QR tạm thời
+            os.remove(temp_qr_path)
+            
+            # Thêm thông tin bổ sung
+            info_paragraph = doc.add_paragraph()
+            info_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            info_paragraph.add_run('Scan this QR code to verify the digital signature of this document.')
+            
+            # Lưu file DOCX mới
+            output_path = docx_path.replace('.docx', '_with_qr.docx')
+            doc.save(output_path)
+            
+            return output_path
+            
+        except Exception as e:
+            print(f"Error adding QR to DOCX: {str(e)}")
+            raise
+
+    def download_and_verify_order(self, item):
+        """Tải và xác thực order DOCX"""
+        order = item.data(Qt.UserRole)
+        try:
+            response = requests.get(
+                f"{self.API_BASE_URL}/download-order/{order['id']}"
+            )
+            response.raise_for_status()
+            
+            temp_path = os.path.join(os.path.expanduser("~"), "Downloads", f"order_{order['id']}_from_{order['buyer_name']}.docx")
+            with open(temp_path, 'wb') as f:
+                f.write(response.content)
+            
+            # Đọc file DOCX đã ký
+            doc = Document(temp_path)
+            metadata_str = doc.core_properties.comments
+            if not metadata_str:
+                QMessageBox.warning(self, "Lỗi", "File DOCX không có metadata.")
+                return
+
+            # Parse metadata
+            metadata = json.loads(metadata_str)
+            
+            signature_b64 = metadata.get('signature')
+            buyer = metadata.get('buyer')
+            sign_time = metadata.get('sign_time')
+            
+            if not signature_b64 or not buyer:
+                QMessageBox.warning(self, "Lỗi", "File DOCX không có chữ ký hợp lệ")
+                return
+            
+            # Lấy certificate của người mua
+            response_cert = requests.get(
+                f"{self.API_BASE_URL}/get-certificate/",
+                params={'username': buyer}
+            )
+            response_cert.raise_for_status()
+            buyer_certificate = response_cert.json()['certificate']
+
+            # Xác minh certificate
+            if not verify_certificate(buyer_certificate):
+                QMessageBox.warning(self, "Lỗi", "Certificate của người mua không hợp lệ")
+                return
+
+            # Lấy public key từ certificate đã xác minh
+            public_key_buyer = base64.b64decode(buyer_certificate['payload']['public_key'])
+            
+            # Tạo lại bytes DOCX với placeholder để xác thực chữ ký
+            doc_temp = Document(temp_path)
+            metadata_temp = dict(metadata)
+            metadata_temp['signature'] = '__SIGNATURE_PLACEHOLDER__'
+            doc_temp.core_properties.comments = json.dumps(metadata_temp)
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_file:
+                doc_temp.save(tmp_file.name)
+                with open(tmp_file.name, 'rb') as f:
+                    docx_bytes_with_placeholder = f.read()
+                os.remove(tmp_file.name)
+            
+            signature = base64.b64decode(signature_b64)
+            is_valid_signature = ML_DSA_44.verify(public_key_buyer, docx_bytes_with_placeholder, signature)
+            
+            if is_valid_signature:
+                reply = QMessageBox.information(
+                    self, "Xác thực Order thành công!",
+                    f"Order từ {buyer} - Thời gian: {sign_time}\n"
+                    f"Chữ ký của người mua hợp lệ.\n\nBạn có muốn ký và tạo Hóa đơn (Invoice) từ Order này không?",
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+                )
+                if reply == QMessageBox.Yes:
+                    self.sign_downloaded_order_as_invoice(temp_path, buyer)
+                elif reply == QMessageBox.No:
+                    QMessageBox.information(self, "Thông báo", "Order đã được tải về và xác thực.")
+            else:
+                QMessageBox.warning(self, "Lỗi", "Xác thực thất bại: Chữ ký của người mua không hợp lệ.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", f"Lỗi khi tải và xác thực order: {str(e)}")
 
 class RegisterDialog(QDialog):
     def __init__(self, parent=None):

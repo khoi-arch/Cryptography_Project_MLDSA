@@ -25,6 +25,10 @@ os.makedirs(INVOICES_DIR, exist_ok=True)
 ORDERS_DIR = os.path.join(settings.BASE_DIR, 'orders')
 os.makedirs(ORDERS_DIR, exist_ok=True)
 
+# Tạo thư mục lưu sản phẩm nếu chưa có
+PRODUCTS_DIR = os.path.join(settings.BASE_DIR, 'products')
+os.makedirs(PRODUCTS_DIR, exist_ok=True)
+
 def index(request):
     return render(request, 'signature/index.html')
 
@@ -63,23 +67,22 @@ def upload_invoice(request):
             signer_name = request.POST.get('signer_name')
             signature = request.POST.get('signature')
             timestamp = request.POST.get('timestamp')
-            pdf_file = request.FILES.get('pdf')
+            uploaded_file = request.FILES.get('pdf') # Tên field vẫn là 'pdf' từ client
 
-            if not all([signer_name, signature, timestamp, pdf_file]):
+            if not all([signer_name, signature, timestamp, uploaded_file]):
                 return JsonResponse({'error': 'Missing required fields'}, status=400)
 
-            # Tạo tên file duy nhất
-            filename = f"invoice_{signer_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            # Tạo tên file duy nhất với đuôi .docx
+            filename = f"invoice_{signer_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             file_path = os.path.join(INVOICES_DIR, filename)
 
-            # Lưu file PDF
+            # Lưu file DOCX
             with open(file_path, 'wb+') as destination:
-                for chunk in pdf_file.chunks():
+                for chunk in uploaded_file.chunks():
                     destination.write(chunk)
 
             # Lưu thông tin hóa đơn vào database
             invoice_data = {
-                'id': len(os.listdir(INVOICES_DIR)),  # ID đơn giản
                 'signer_name': signer_name,
                 'file_path': file_path,
                 'signature': signature,
@@ -93,6 +96,10 @@ def upload_invoice(request):
                     invoices = json.load(f)
             else:
                 invoices = []
+            
+            # Tạo ID mới, đảm bảo duy nhất
+            new_id = (max([inv['id'] for inv in invoices]) + 1) if invoices else 1
+            invoice_data['id'] = new_id
 
             invoices.append(invoice_data)
 
@@ -152,11 +159,12 @@ def download_invoice(request, invoice_id):
             if not invoice:
                 return JsonResponse({'error': 'Invoice not found'}, status=404)
 
-            # Trả về file PDF
+            # Trả về file DOCX
             return FileResponse(
                 open(invoice['file_path'], 'rb'),
                 as_attachment=True,
-                filename=f"invoice_{invoice['signer_name']}.pdf"
+                filename=f"invoice_{invoice['signer_name']}.docx",
+                content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
             )
 
         except Exception as e:
@@ -168,26 +176,26 @@ def download_invoice(request, invoice_id):
 
 @csrf_exempt
 def upload_order(request):
-    """Bên mua upload file order PDF đã ký"""
+    """Bên mua upload file order DOCX đã ký"""
     if request.method == 'POST':
         try:
             buyer_name = request.POST.get('buyer_name')
             signature = request.POST.get('signature')
             timestamp = request.POST.get('timestamp')
-            pdf_file = request.FILES.get('pdf')
+            uploaded_file = request.FILES.get('pdf') # Tên field vẫn là 'pdf' từ client
 
-            if not all([buyer_name, signature, timestamp, pdf_file]):
+            if not all([buyer_name, signature, timestamp, uploaded_file]):
                 return JsonResponse({'error': 'Missing required fields'}, status=400)
 
-            filename = f"order_{buyer_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            # Tạo tên file duy nhất với đuôi .docx
+            filename = f"order_{buyer_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             file_path = os.path.join(ORDERS_DIR, filename)
 
             with open(file_path, 'wb+') as destination:
-                for chunk in pdf_file.chunks():
+                for chunk in uploaded_file.chunks():
                     destination.write(chunk)
 
             order_data = {
-                'id': len(os.listdir(ORDERS_DIR)),
                 'buyer_name': buyer_name,
                 'file_path': file_path,
                 'signature': signature,
@@ -201,6 +209,10 @@ def upload_order(request):
             else:
                 orders = []
 
+            # Tạo ID mới, đảm bảo duy nhất
+            new_id = (max([o['id'] for o in orders]) + 1) if orders else 1
+            order_data['id'] = new_id
+
             orders.append(order_data)
             with open(metadata_path, 'w') as f:
                 json.dump(orders, f, indent=2)
@@ -212,7 +224,7 @@ def upload_order(request):
 
 @csrf_exempt
 def list_orders(request):
-    """Lấy danh sách order PDF"""
+    """Lấy danh sách order DOCX"""
     if request.method == 'GET':
         try:
             metadata_path = os.path.join(ORDERS_DIR, 'orders.json')
@@ -232,7 +244,7 @@ def list_orders(request):
 
 @csrf_exempt
 def download_order(request, order_id):
-    """Tải order PDF"""
+    """Tải order DOCX"""
     if request.method == 'GET':
         try:
             metadata_path = os.path.join(ORDERS_DIR, 'orders.json')
@@ -248,102 +260,234 @@ def download_order(request, order_id):
                 print(f"Error: Order with ID {order_id} not found in {metadata_path}") # Debug log
                 return JsonResponse({'error': 'Order not found'}, status=404)
             
-            file_path = order['file_path']
-            print(f"Attempting to open file: {file_path}") # Debug log
-            
-            if not os.path.exists(file_path):
-                print(f"Error: File does not exist at {file_path}") # Debug log
-                return JsonResponse({'error': f'File not found on server: {file_path}'}, status=404)
-            
-            # Check permissions (optional, but good for debugging)
-            if not os.access(file_path, os.R_OK):
-                print(f"Error: No read permissions for file: {file_path}") # Debug log
-                return JsonResponse({'error': f'No read permissions for file: {file_path}'}, status=403) # Forbidden
-            
+            # Trả về file DOCX
             return FileResponse(
-                open(file_path, 'rb'),
+                open(order['file_path'], 'rb'),
                 as_attachment=True,
-                filename=f"order_{order['buyer_name']}.pdf"
+                filename=f"order_{order['buyer_name']}.docx",
+                content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
             )
         except Exception as e:
-            print(f"Exception in download_order: {str(e)}") # Debug log
-            print(traceback.format_exc()) # In toàn bộ traceback
+            print(f"Error downloading order: {str(e)}") # Debug log
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 @api_view(['POST'])
 def register(request):
+    """Đăng ký người dùng mới và tạo certificate"""
     try:
         data = request.data
+        public_key_b64 = data.get('public_key')
+        payload = data.get('payload')
+        signature_b64 = data.get('signature')
         
-        if not all(key in data for key in ['public_key', 'payload', 'signature']):
-            return Response({
-                'error': 'Missing required fields',
-                'received_fields': list(data.keys())
-            }, status=400)
+        if not all([public_key_b64, payload, signature_b64]):
+            return Response({'error': 'Missing required data'}, status=400)
             
-        try:
-            public_key = base64.b64decode(data['public_key'])
-            payload = data['payload']
-            signature = base64.b64decode(data['signature'])
-        except Exception as e:
-            return Response({
-                'error': f'Invalid data format: {str(e)}'
-            }, status=400)
+        public_key = base64.b64decode(public_key_b64)
+        signature = base64.b64decode(signature_b64)
         
         # Verify proof of possession
         if not verify_proof_of_possession(public_key, payload, signature):
-            return Response({
-                'error': 'Invalid proof of possession'
-            }, status=400)
+            return Response({'error': 'Invalid proof of possession'}, status=400)
             
-        try:
-            # Create certificate
-            certificate = create_certificate(payload['username'], public_key, payload['role'])
+        # Create certificate
+        username = payload.get('username')
+        role = payload.get('role')
+        certificate = create_certificate(username, public_key, role)
             
-            # Read CA public key and create its hash
-            with open('keys/ca_public_key.pem', 'r') as f:
-                ca_key_data = json.load(f)  # Parse JSON data
-                ca_public_key = ca_key_data['public_key']
-                ca_public_key_bytes = base64.b64decode(ca_public_key)
-                # Sử dụng hashlib.sha256 thay vì ML_DSA_44.hash
-                ca_public_key_hash = hashlib.sha256(ca_public_key_bytes).digest()
+        # Lấy public key và hash của CA để trả về cho client
+        with open('keys/ca_public_key.pem', 'r') as f:
+            ca_public_key_data = json.load(f)
+            ca_public_key_b64 = ca_public_key_data['public_key']
+            
+        ca_public_key_bytes = base64.b64decode(ca_public_key_b64)
+        ca_public_key_hash_b64 = base64.b64encode(hashlib.sha256(ca_public_key_bytes).digest()).decode('utf-8')
                 
-            return Response({
-                'message': 'Registration successful',
-                'certificate': certificate,
-                'ca_public_key': ca_public_key,
-                'ca_public_key_hash': base64.b64encode(ca_public_key_hash).decode('utf-8')
-            })
-        except Exception as e:
-            print(f"Error in certificate creation: {str(e)}")
-            return Response({
-                'error': f'Certificate creation failed: {str(e)}'
-            }, status=400)
+        return Response({
+            'message': 'User registered successfully',
+            'certificate': certificate,
+            'ca_public_key': ca_public_key_b64,
+            'ca_public_key_hash': ca_public_key_hash_b64
+        })
             
     except Exception as e:
-        print(f"Error in register: {str(e)}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
-        return Response({
-            'error': str(e)
-        }, status=400)
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=500)
 
 @csrf_exempt
 def get_certificate(request):
-    """Lấy certificate của user"""
+    """Lấy certificate của người dùng"""
     if request.method == 'GET':
         username = request.GET.get('username')
         if not username:
-            return JsonResponse({'error': 'Missing username'}, status=400)
+            return JsonResponse({'error': 'Username required'}, status=400)
             
-        certificate_path = os.path.join(settings.BASE_DIR, 'certificates', f"{username}_cert.json")
-        if not os.path.exists(certificate_path):
+        cert_path = f'certificates/{username}_cert.json'
+        if not os.path.exists(cert_path):
             return JsonResponse({'error': 'Certificate not found'}, status=404)
             
-        with open(certificate_path, 'r') as f:
-            certificate = json.load(f)
-            
-        return JsonResponse({'certificate': certificate})
+        try:
+            with open(cert_path, 'r') as f:
+                certificate = json.load(f)
+            return JsonResponse({'certificate': certificate})
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
         
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def add_product(request):
+    """Bên bán thêm sản phẩm mới"""
+    if request.method == 'POST':
+        try:
+            seller_name = request.POST.get('seller_name')
+            product_name = request.POST.get('product_name')
+            price = request.POST.get('price')
+            
+            if not all([seller_name, product_name, price]):
+                return JsonResponse({'error': 'Missing required fields'}, status=400)
+            
+            try:
+                price = float(price)
+            except ValueError:
+                return JsonResponse({'error': 'Invalid price format'}, status=400)
+            
+            # Lưu sản phẩm vào file JSON
+            products_file = os.path.join(PRODUCTS_DIR, 'products.json')
+            if os.path.exists(products_file):
+                with open(products_file, 'r') as f:
+                    products = json.load(f)
+            else:
+                products = []
+            
+            # Tạo ID mới cho sản phẩm
+            new_id = (max([p['id'] for p in products]) + 1) if products else 1
+            
+            product_data = {
+                'id': new_id,
+                'seller_name': seller_name,
+                'product_name': product_name,
+                'price': price,
+                'created_at': datetime.now().isoformat()
+            }
+            
+            products.append(product_data)
+            
+            with open(products_file, 'w') as f:
+                json.dump(products, f, indent=2)
+            
+            return JsonResponse({
+                'message': 'Product added successfully',
+                'product_id': new_id
+            })
+            
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def list_products(request):
+    """Lấy danh sách sản phẩm"""
+    if request.method == 'GET':
+        try:
+            products_file = os.path.join(PRODUCTS_DIR, 'products.json')
+            if not os.path.exists(products_file):
+                return JsonResponse([], safe=False)
+            
+            with open(products_file, 'r') as f:
+                products = json.load(f)
+            
+            return JsonResponse(products, safe=False)
+            
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def list_my_products(request):
+    """Lấy danh sách sản phẩm của người bán cụ thể"""
+    if request.method == 'GET':
+        try:
+            seller_name = request.GET.get('seller_name')
+            if not seller_name:
+                return JsonResponse({'error': 'Seller name required'}, status=400)
+            
+            products_file = os.path.join(PRODUCTS_DIR, 'products.json')
+            if not os.path.exists(products_file):
+                return JsonResponse([], safe=False)
+            
+            with open(products_file, 'r') as f:
+                all_products = json.load(f)
+            
+            # Lọc sản phẩm theo seller_name
+            my_products = [p for p in all_products if p['seller_name'] == seller_name]
+            
+            return JsonResponse(my_products, safe=False)
+            
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def list_my_invoices(request):
+    """Lấy danh sách hóa đơn của người bán cụ thể"""
+    if request.method == 'GET':
+        try:
+            seller_name = request.GET.get('seller_name')
+            if not seller_name:
+                return JsonResponse({'error': 'Seller name required'}, status=400)
+            
+            metadata_path = os.path.join(INVOICES_DIR, 'invoices.json')
+            if not os.path.exists(metadata_path):
+                return JsonResponse([], safe=False)
+
+            with open(metadata_path, 'r') as f:
+                all_invoices = json.load(f)
+
+            # Lọc hóa đơn theo signer_name
+            my_invoices = [{
+                'id': inv['id'],
+                'signer_name': inv['signer_name'],
+                'timestamp': inv['timestamp']
+            } for inv in all_invoices if inv['signer_name'] == seller_name]
+
+            return JsonResponse(my_invoices, safe=False)
+
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+@csrf_exempt
+def list_my_orders(request):
+    """Lấy danh sách order của người mua cụ thể"""
+    if request.method == 'GET':
+        try:
+            buyer_name = request.GET.get('buyer_name')
+            if not buyer_name:
+                return JsonResponse({'error': 'Buyer name required'}, status=400)
+            
+            metadata_path = os.path.join(ORDERS_DIR, 'orders.json')
+            if not os.path.exists(metadata_path):
+                return JsonResponse([], safe=False)
+            
+            with open(metadata_path, 'r') as f:
+                all_orders = json.load(f)
+            
+            # Lọc order theo buyer_name
+            my_orders = [{
+                'id': order['id'],
+                'buyer_name': order['buyer_name'],
+                'timestamp': order['timestamp']
+            } for order in all_orders if order['buyer_name'] == buyer_name]
+            
+            return JsonResponse(my_orders, safe=False)
+            
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    
     return JsonResponse({'error': 'Method not allowed'}, status=405)
