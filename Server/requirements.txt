@@ -2,3 +2,6 @@ django>=4.2.0
 python-docx>=0.8.11
 dilithium-py>=0.1.0
 python-magic>=0.4.27 
+djangorestframework
+PyPDF2
+pycryptodome
