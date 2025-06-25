@@ -72,11 +72,11 @@ def upload_invoice(request):
             if not all([signer_name, signature, timestamp, uploaded_file]):
                 return JsonResponse({'error': 'Missing required fields'}, status=400)
 
-            # Tạo tên file duy nhất với đuôi .docx
-            filename = f"invoice_{signer_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            # Tạo tên file duy nhất với đuôi .pdf
+            filename = f"invoice_{signer_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
             file_path = os.path.join(INVOICES_DIR, filename)
 
-            # Lưu file DOCX
+            # Lưu file PDF
             with open(file_path, 'wb+') as destination:
                 for chunk in uploaded_file.chunks():
                     destination.write(chunk)
@@ -159,12 +159,12 @@ def download_invoice(request, invoice_id):
             if not invoice:
                 return JsonResponse({'error': 'Invoice not found'}, status=404)
 
-            # Trả về file DOCX
+            # Trả về file PDF
             return FileResponse(
                 open(invoice['file_path'], 'rb'),
                 as_attachment=True,
-                filename=f"invoice_{invoice['signer_name']}.docx",
-                content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                filename=f"invoice_{invoice['signer_name']}.pdf",
+                content_type='application/pdf'
             )
 
         except Exception as e:
@@ -176,19 +176,19 @@ def download_invoice(request, invoice_id):
 
 @csrf_exempt
 def upload_order(request):
-    """Bên mua upload file order DOCX đã ký"""
+    """Bên mua upload file order TXT đã ký"""
     if request.method == 'POST':
         try:
             buyer_name = request.POST.get('buyer_name')
             signature = request.POST.get('signature')
             timestamp = request.POST.get('timestamp')
-            uploaded_file = request.FILES.get('pdf') # Tên field vẫn là 'pdf' từ client
+            uploaded_file = request.FILES.get('txt')  # Đổi từ 'pdf' sang 'txt'
 
             if not all([buyer_name, signature, timestamp, uploaded_file]):
                 return JsonResponse({'error': 'Missing required fields'}, status=400)
 
-            # Tạo tên file duy nhất với đuôi .docx
-            filename = f"order_{buyer_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            # Tạo tên file duy nhất với đuôi .txt
+            filename = f"order_{buyer_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
             file_path = os.path.join(ORDERS_DIR, filename)
 
             with open(file_path, 'wb+') as destination:
@@ -264,8 +264,8 @@ def download_order(request, order_id):
             return FileResponse(
                 open(order['file_path'], 'rb'),
                 as_attachment=True,
-                filename=f"order_{order['buyer_name']}.docx",
-                content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                filename=f"order_{order['buyer_name']}.txt",
+                content_type='text/plain'
             )
         except Exception as e:
             print(f"Error downloading order: {str(e)}") # Debug log
