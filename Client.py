@@ -44,8 +44,16 @@ logging.basicConfig(
 # Unique identifier for our metadata
 METADATA_IDENTIFIER = "MLDSA_METADATA_JSON:"
 
-# Đường dẫn tuyệt đối hoặc tương đối đến file font
-font_path = "DejaVuSans.ttf"  # Đặt file này cùng thư mục với script
+# Xác định đường dẫn font phù hợp cho cả khi chạy script và khi đóng gói exe
+if getattr(sys, 'frozen', False):
+    base_path = sys._MEIPASS
+else:
+    base_path = os.path.dirname(os.path.abspath(__file__))
+
+font_path = os.path.join(base_path, "DejaVuSans.ttf")
+if not os.path.exists(font_path):
+    raise FileNotFoundError("Không tìm thấy file font DejaVuSans.ttf! Đặt file này cùng thư mục với script hoặc exe.")
+
 pdfmetrics.registerFont(TTFont('DejaVu', font_path))
 base_font = 'DejaVu'
 

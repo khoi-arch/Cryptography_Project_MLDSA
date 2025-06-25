@@ -5,7 +5,7 @@ a = Analysis(
     ['Client.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('DejaVuSans.ttf', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
